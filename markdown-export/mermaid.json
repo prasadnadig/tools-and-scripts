@@ -1,0 +1,24 @@
+{
+  "theme": "default",
+  "fontFamily": "sans-serif",
+  "flowchart": {
+    "fontFamily": "sans-serif",
+    "htmlLabels": false
+  },
+  "sequenceDiagram": {
+    "fontFamily": "sans-serif"
+  },
+  "classDiagram": {
+    "fontFamily": "sans-serif"
+  },
+  "stateDiagram": {
+    "fontFamily": "sans-serif"
+  },
+  "gantt": {
+    "fontFamily": "sans-serif"
+  },
+  "pie": {
+    "fontFamily": "sans-serif"
+  }
+}
+
