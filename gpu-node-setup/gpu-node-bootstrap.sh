@@ -83,6 +83,23 @@ apt_install_if_missing() {
   fi
 }
 
+ensure_apt_candidate() {
+  local pkg="$1"
+  local candidate
+  candidate="$(apt-cache policy "$pkg" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+
+  if [[ -z "$candidate" || "$candidate" == "(none)" ]]; then
+    echo "ERROR: APT cannot resolve package: $pkg" >&2
+    echo "Check configured repos and run: apt-get update" >&2
+    echo >&2
+    echo "Diagnostics:" >&2
+    apt-cache policy "$pkg" >&2 || true
+    return 1
+  fi
+
+  return 0
+}
+
 install_base_packages() {
   # gpg and curl are needed for vendor repository key management.
   local pkgs=(
@@ -92,6 +109,7 @@ install_base_packages() {
     lsb-release
     software-properties-common
     apt-transport-https
+    wget
     ripgrep
     tree
   )
@@ -102,8 +120,33 @@ install_base_packages() {
 }
 
 install_cuda_toolkit() {
+  setup_cuda_repo
+
   # Uses the CUDA package/version stream requested by the caller, defaulting to CUDA 12.8.
   apt_install_if_missing "$CUDA_TOOLKIT_APT_PACKAGE"
+}
+
+setup_cuda_repo() {
+  # Ubuntu repos usually do not carry version-pinned CUDA packages like cuda-toolkit-12-8.
+  # Install NVIDIA's cuda-keyring package once so APT can resolve CUDA 12.8 packages.
+  if dpkg -s cuda-keyring >/dev/null 2>&1; then
+    log "CUDA repository keyring already installed"
+    apt-get update -y
+    return
+  fi
+
+  local distro
+  distro="$(. /etc/os-release && echo "ubuntu${VERSION_ID//./}")"
+
+  local keyring_deb
+  keyring_deb="/tmp/cuda-keyring_1.1-1_all.deb"
+
+  log "Installing NVIDIA CUDA APT keyring for ${distro}"
+  curl -fsSL "https://developer.download.nvidia.com/compute/cuda/repos/${distro}/x86_64/cuda-keyring_1.1-1_all.deb" -o "$keyring_deb"
+  dpkg -i "$keyring_deb"
+  rm -f "$keyring_deb"
+
+  apt-get update -y
 }
 
 write_cuda_profile() {
@@ -160,6 +203,16 @@ setup_nvidia_container_repo() {
 install_nvidia_container_toolkit() {
   setup_nvidia_container_repo
   apt-get update -y
+
+  if ! ensure_apt_candidate nvidia-container-toolkit; then
+    echo "Repo file content (/etc/apt/sources.list.d/nvidia-container-toolkit.list):" >&2
+    if [[ -f /etc/apt/sources.list.d/nvidia-container-toolkit.list ]]; then
+      cat /etc/apt/sources.list.d/nvidia-container-toolkit.list >&2
+    else
+      echo "(not found)" >&2
+    fi
+    exit 1
+  fi
 
   if [[ "$NVIDIA_CONTAINER_TOOLKIT_VERSION" == "latest" ]]; then
     apt-get install -y nvidia-container-toolkit
