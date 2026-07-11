@@ -109,6 +109,7 @@ sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
 This step configures:
 - NVIDIA container toolkit
 - Docker GPU runtime integration
+- Docker default runtime set to `nvidia`
 
 ### 6. Optionally install host CUDA runtime/toolkit
 
@@ -134,6 +135,7 @@ What you want to see:
 - `nvidia-smi` works
 - CUDA runtime libraries are visible
 - Docker runtime is present
+- Docker default runtime is `nvidia`
 - NVIDIA container runtime is configured
 - Docker GPU smoke test works
 

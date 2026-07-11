@@ -68,6 +68,7 @@ Notes:
   - At least one action option is required: --mode, --setup-all, --install-base-packages, --install-nvidia-driver, --install-cuda-runtime, --install-cuda-container-runtime, --switch-active-cuda, or --summarize-installation
   - Running with no arguments only prints this help
   - Verify summary reports NVIDIA detection as one driver version line, GPU count, and unique GPU model lines
+  - Docker is configured with NVIDIA as the default runtime on this host
   - Run --install-base-packages first on a fresh host so help can inspect and suggest NVIDIA driver candidates for the next step
   - Run --install-nvidia-driver second, then reboot
   - After drivers are ready, --install-cuda-container-runtime can be installed independently of host CUDA toolkit/runtime
@@ -747,6 +748,47 @@ setup_nvidia_container_repo() {
     > /etc/apt/sources.list.d/nvidia-container-toolkit.list
 }
 
+ensure_nvidia_docker_runtime_available() {
+  local runtimes_json default_runtime
+
+  if ! command -v nvidia-ctk >/dev/null 2>&1; then
+    echo "ERROR: nvidia-ctk is not available after installing nvidia-container-toolkit." >&2
+    exit 1
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "ERROR: docker is not installed or not available in PATH." >&2
+    exit 1
+  fi
+
+  # Register NVIDIA runtime and set it as Docker default runtime.
+  nvidia-ctk runtime configure --runtime=docker --set-as-default
+
+  if systemctl list-unit-files | grep -q '^docker.service'; then
+    systemctl restart docker
+  fi
+
+  runtimes_json="$(docker info --format '{{json .Runtimes}}' 2>/dev/null || true)"
+  if [[ -z "$runtimes_json" || "$runtimes_json" == "null" ]]; then
+    echo "ERROR: unable to read Docker runtimes after NVIDIA runtime configuration." >&2
+    exit 1
+  fi
+
+  if ! grep -q '"nvidia"' <<< "$runtimes_json"; then
+    echo "ERROR: Docker runtimes do not include 'nvidia' after setup." >&2
+    echo "Current runtimes: $runtimes_json" >&2
+    exit 1
+  fi
+
+  default_runtime="$(docker info --format '{{.DefaultRuntime}}' 2>/dev/null || true)"
+  if [[ "$default_runtime" != "nvidia" ]]; then
+    echo "ERROR: Docker default runtime is '$default_runtime' (expected 'nvidia')." >&2
+    exit 1
+  fi
+
+  log "Docker NVIDIA runtime is available and set as default."
+}
+
 install_nvidia_container_toolkit() {
   setup_nvidia_container_repo
   apt-get update -y
@@ -767,14 +809,7 @@ install_nvidia_container_toolkit() {
     apt-get install -y "nvidia-container-toolkit=${NVIDIA_CONTAINER_TOOLKIT_VERSION}"
   fi
 
-  if command -v nvidia-ctk >/dev/null 2>&1; then
-    # Configures Docker runtime integration for GPU passthrough.
-    nvidia-ctk runtime configure --runtime=docker || true
-  fi
-
-  if systemctl list-unit-files | grep -q '^docker.service'; then
-    systemctl restart docker || true
-  fi
+  ensure_nvidia_docker_runtime_available
 }
 
 do_setup() {
@@ -828,6 +863,7 @@ do_verify() {
   if command -v docker >/dev/null 2>&1; then
     docker --version || true
     docker info --format '{{json .Runtimes}}' || true
+    docker info --format 'DefaultRuntime={{.DefaultRuntime}}' || true
 
     if has_nvidia_smi && has_libnvidia_ml; then
       docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu22.04 nvidia-smi || true

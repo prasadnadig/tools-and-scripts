@@ -12,7 +12,7 @@ Purpose:
 Installs/configures:
 - CUDA toolkit/runtime package: `cuda-toolkit-12-8` (default, configurable)
 - Docker engine + compose/buildx plugins
-- NVIDIA Container Toolkit runtime integration with Docker (`nvidia-ctk runtime configure --runtime=docker`)
+- NVIDIA Container Toolkit runtime integration with Docker (`nvidia-ctk runtime configure --runtime=docker --set-as-default`)
 - Global CUDA shell exports via per-version profiles and `/etc/profile.d/cuda-active-runtime.sh`
 
 Not installed:
@@ -87,6 +87,7 @@ Container runtime vs host CUDA runtime:
 - `--install-cuda-container-runtime` enables Docker/NVIDIA GPU container integration.
 - It requires base packages plus a working NVIDIA driver stack.
 - It does not require the host CUDA toolkit/runtime to be installed.
+- It configures Docker to use NVIDIA as the default runtime.
 - `--install-cuda-runtime` installs host CUDA userspace tooling and libraries such as `nvcc` and sets the active CUDA profile.
 - Many container-first GPU nodes only need the container runtime step and can defer or skip host CUDA runtime installation.
 
@@ -251,6 +252,7 @@ nvidia-smi
 nvcc --version
 docker --version
 docker info --format '{{json .Runtimes}}'
+docker info --format 'DefaultRuntime={{.DefaultRuntime}}'
 docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu22.04 nvidia-smi
 ```
 
