@@ -13,16 +13,25 @@ set -euo pipefail
 # - profile.d CUDA exports: ensures CUDA binaries/libraries are discoverable in shells by default.
 #
 # Modes:
-#   setup    -> install/configure components
+#   setup-cuda-runtimes -> install/configure CUDA runtime + container runtime components
 #   verify   -> run diagnostics
 #   runbook  -> emit a concise markdown runbook
 #
 # Extra option:
 #   --summarize-installation -> print installed versions/details (standalone or after setup)
+#   --setup-all              -> run the full golden-path install flow end-to-end (idempotent)
+#   --install-base-packages  -> install host prerequisites before driver/runtime steps (idempotent)
 #   --install-nvidia-driver  -> install host NVIDIA driver stack (idempotent)
+#   --install-cuda-runtime   -> install CUDA toolkit/runtime and active profile (idempotent)
+#   --install-cuda-container-runtime -> install NVIDIA container runtime integration (idempotent)
 #   --switch-active-cuda     -> switch active CUDA runtime profile (idempotent)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STATE_DIR="/var/lib/gpu-node-bootstrap"
+BASE_PACKAGES_MARKER="$STATE_DIR/base-packages.done"
+DRIVER_INSTALL_MARKER="$STATE_DIR/nvidia-driver.done"
+CUDA_RUNTIME_MARKER="$STATE_DIR/cuda-runtime.done"
+CUDA_CONTAINER_RUNTIME_MARKER="$STATE_DIR/cuda-container-runtime.done"
 
 MODE=""
 RUNBOOK_OUT="$SCRIPT_DIR/gpu-node-bootstrap-runbook.md"
@@ -34,7 +43,11 @@ NVIDIA_DRIVER_VERSION=""
 DISABLE_NVIDIA_HOLD=0
 SKIP_DOCKER_INSTALL=0
 SUMMARIZE_ONLY=0
+SETUP_ALL_ONLY=0
+INSTALL_BASE_PACKAGES_ONLY=0
 INSTALL_NVIDIA_DRIVER_ONLY=0
+INSTALL_CUDA_RUNTIME_ONLY=0
+INSTALL_CUDA_CONTAINER_RUNTIME_ONLY=0
 SWITCH_ACTIVE_CUDA_HOME=""
 ACTION_SELECTED=0
 ARG_COUNT=$#
@@ -42,20 +55,33 @@ ARG_COUNT=$#
 usage() {
   cat <<'EOF'
 Usage:
-  sudo ./gpu-node-bootstrap.sh --mode setup|verify|runbook [options]
+  sudo ./gpu-node-bootstrap.sh --mode setup-cuda-runtimes|verify|runbook [options]
+  sudo ./gpu-node-bootstrap.sh --setup-all [options]
+  sudo ./gpu-node-bootstrap.sh --install-base-packages [options]
   sudo ./gpu-node-bootstrap.sh --install-nvidia-driver [options]
+  sudo ./gpu-node-bootstrap.sh --install-cuda-runtime [options]
+  sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime [options]
   sudo ./gpu-node-bootstrap.sh --switch-active-cuda <cuda-home> [options]
   sudo ./gpu-node-bootstrap.sh --summarize-installation [options]
 
 Notes:
-  - At least one action option is required: --mode, --install-nvidia-driver, --switch-active-cuda, or --summarize-installation
+  - At least one action option is required: --mode, --setup-all, --install-base-packages, --install-nvidia-driver, --install-cuda-runtime, --install-cuda-container-runtime, --switch-active-cuda, or --summarize-installation
   - Running with no arguments only prints this help
+  - Run --install-base-packages first on a fresh host so help can inspect and suggest NVIDIA driver candidates for the next step
+  - Run --install-nvidia-driver second, then reboot
+  - After drivers are ready, --install-cuda-container-runtime can be installed independently of host CUDA toolkit/runtime
+  - Host CUDA runtime is optional for container-first GPU nodes
+  - --setup-all follows the full golden path and stops at the first failing step
   - Re-running setup/driver install is safe (idempotent) and intended for repair workflows
   - Re-running CUDA profile switches is safe (idempotent)
 
 Options:
-  --mode <mode>                                setup, verify, runbook
+  --mode <mode>                                setup-cuda-runtimes, verify, runbook
+  --setup-all                                  Run full golden-path install flow end-to-end
+  --install-base-packages                      Install host prerequisite packages before driver/runtime steps
   --install-nvidia-driver                      Install/update host NVIDIA drivers (idempotent)
+  --install-cuda-runtime                       Install CUDA toolkit/runtime and active CUDA shell profile
+  --install-cuda-container-runtime             Install NVIDIA container runtime integration for Docker
   --switch-active-cuda <path>                  Switch active CUDA runtime profile (idempotent)
   --nvidia-driver-branch <branch>              Driver branch to install/pin (default: 580)
   --nvidia-driver-version <ver>                Exact driver version to pin (example: 580.173.02-1ubuntu1)
@@ -69,10 +95,14 @@ Options:
   -h, --help                                   Show this help
 
 Examples:
+  sudo ./gpu-node-bootstrap.sh --setup-all
+  sudo ./gpu-node-bootstrap.sh --install-base-packages
   sudo ./gpu-node-bootstrap.sh --install-nvidia-driver
+  sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
+  sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
   sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580
   sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-version 580.173.02-1ubuntu1
-  sudo ./gpu-node-bootstrap.sh --mode setup
+  sudo ./gpu-node-bootstrap.sh --mode setup-cuda-runtimes
   sudo ./gpu-node-bootstrap.sh --switch-active-cuda /usr/local/cuda-12.8
   sudo ./gpu-node-bootstrap.sh --mode verify
   sudo ./gpu-node-bootstrap.sh --nvidia-container-toolkit-version 1.17.8-1
@@ -99,6 +129,60 @@ require_root() {
     echo "Usage: sudo ./gpu-node-bootstrap.sh ..." >&2
     exit 1
   fi
+}
+
+ensure_state_dir() {
+  mkdir -p "$STATE_DIR"
+}
+
+mark_action_complete() {
+  local marker="$1"
+  ensure_state_dir
+  date -u +"%Y-%m-%dT%H:%M:%SZ" > "$marker"
+}
+
+base_packages_ready() {
+  [[ -f "$BASE_PACKAGES_MARKER" ]] && return 0
+
+  if dpkg -s ubuntu-drivers-common >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
+    mark_action_complete "$BASE_PACKAGES_MARKER"
+    return 0
+  fi
+
+  return 1
+}
+
+driver_install_ready() {
+  [[ -f "$DRIVER_INSTALL_MARKER" ]] && return 0
+
+  if has_nvidia_smi && has_libnvidia_ml; then
+    mark_action_complete "$DRIVER_INSTALL_MARKER"
+    return 0
+  fi
+
+  return 1
+}
+
+cuda_runtime_ready() {
+  [[ -f "$CUDA_RUNTIME_MARKER" ]] && return 0
+
+  if dpkg -s "$CUDA_TOOLKIT_APT_PACKAGE" >/dev/null 2>&1; then
+    mark_action_complete "$CUDA_RUNTIME_MARKER"
+    return 0
+  fi
+
+  return 1
+}
+
+cuda_container_runtime_ready() {
+  [[ -f "$CUDA_CONTAINER_RUNTIME_MARKER" ]] && return 0
+
+  if dpkg -s nvidia-container-toolkit >/dev/null 2>&1; then
+    mark_action_complete "$CUDA_CONTAINER_RUNTIME_MARKER"
+    return 0
+  fi
+
+  return 1
 }
 
 apt_install_if_missing() {
@@ -180,7 +264,7 @@ print_driver_upgrade_advice() {
     echo "Kernel module fallback      : $module_pkg => ${module_candidate:-none}"
     echo "Tip                         : choose a branch where both driver and kernel module candidates are available"
   else
-    echo "Recommended driver package  : unavailable (install ubuntu-drivers-common for detection)"
+    echo "Recommended driver package  : unavailable (run --install-base-packages first so help can inspect and suggest the next NVIDIA driver step)"
   fi
 }
 
@@ -204,8 +288,83 @@ Suggested commands (Ubuntu):
   sudo reboot
 
 After reboot, rerun:
-  sudo ./gpu-node-bootstrap.sh --mode setup
+  sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
+  sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
+  # or use the wrapper:
+  sudo ./gpu-node-bootstrap.sh --mode setup-cuda-runtimes
 EOF
+}
+
+setup_all_failure() {
+  local step="$1"
+  local rerun_hint="$2"
+  local exit_code="$3"
+
+  echo >&2
+  echo "ERROR: setup-all stopped during step: $step" >&2
+  echo "Resolve the issue shown above, then rerun the full flow or the specific step." >&2
+  echo "Suggested retry: $rerun_hint" >&2
+  echo "The script is idempotent, so repeating completed steps is safe." >&2
+  exit "$exit_code"
+}
+
+run_setup_all_step() {
+  local label="$1"
+  local rerun_hint="$2"
+  shift 2
+
+  log "setup-all: starting ${label}"
+  if "$@"; then
+    log "setup-all: completed ${label}"
+    return 0
+  fi
+
+  setup_all_failure "$label" "$rerun_hint" 1
+}
+
+setup_all_action() {
+  require_root
+  need_cmd apt-get
+
+  run_setup_all_step \
+    "base packages" \
+    "sudo ./gpu-node-bootstrap.sh --install-base-packages" \
+    install_base_packages_action
+
+  if driver_install_ready; then
+    log "setup-all: detected working NVIDIA driver userspace; continuing with runtime steps"
+  else
+    run_setup_all_step \
+      "nvidia driver install" \
+      "sudo ./gpu-node-bootstrap.sh --install-nvidia-driver${NVIDIA_DRIVER_VERSION:+ --nvidia-driver-version $NVIDIA_DRIVER_VERSION}${NVIDIA_DRIVER_BRANCH:+ --nvidia-driver-branch $NVIDIA_DRIVER_BRANCH}" \
+      install_nvidia_driver
+
+    echo
+    echo "setup-all requires a reboot before runtime steps can continue." >&2
+    echo "Run: sudo reboot" >&2
+    echo "After reboot, rerun: sudo ./gpu-node-bootstrap.sh --setup-all" >&2
+    echo "Completed steps are recorded; rerunning is safe." >&2
+    return 0
+  fi
+
+  run_setup_all_step \
+    "nvidia container runtime" \
+    "sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime" \
+    install_cuda_container_runtime_action
+
+  run_setup_all_step \
+    "host cuda runtime" \
+    "sudo ./gpu-node-bootstrap.sh --install-cuda-runtime" \
+    install_cuda_runtime_action
+
+  run_setup_all_step \
+    "verification" \
+    "sudo ./gpu-node-bootstrap.sh --mode verify" \
+    do_verify
+
+  echo
+  echo "setup-all completed successfully." >&2
+  echo "The script is idempotent, so rerunning --setup-all is safe for repair workflows." >&2
 }
 
 install_nvidia_driver() {
@@ -213,6 +372,8 @@ install_nvidia_driver() {
 
   require_root
   need_cmd apt-get
+
+  require_base_packages_completed
 
   target_driver_pkg="nvidia-driver-${NVIDIA_DRIVER_BRANCH}"
 
@@ -248,6 +409,87 @@ install_nvidia_driver() {
   fi
   echo "A reboot is required before GPU runtime checks will pass."
   echo "Run: sudo reboot"
+
+  mark_action_complete "$DRIVER_INSTALL_MARKER"
+}
+
+require_base_packages_completed() {
+  if base_packages_ready; then
+    return
+  fi
+
+  echo "ERROR: Base packages step has not been completed on this host." >&2
+  echo "Run first: sudo ./gpu-node-bootstrap.sh --install-base-packages" >&2
+  exit 1
+}
+
+require_driver_install_completed() {
+  if driver_install_ready; then
+    return
+  fi
+
+  echo "ERROR: NVIDIA driver installation step has not been completed on this host." >&2
+  echo "Run next: sudo ./gpu-node-bootstrap.sh --install-nvidia-driver" >&2
+  exit 1
+}
+
+install_base_packages_action() {
+  require_root
+  need_cmd apt-get
+
+  log "Installing base host packages and Ubuntu-side prerequisites (idempotent)"
+  apt-get update -y
+
+  install_base_packages
+  apt_install_if_missing ubuntu-drivers-common
+  install_docker_stack
+
+  mark_action_complete "$BASE_PACKAGES_MARKER"
+
+  echo
+  echo "Base packages installation step completed."
+  echo "Next step: sudo ./gpu-node-bootstrap.sh --install-nvidia-driver"
+}
+
+install_cuda_runtime_action() {
+  require_root
+  need_cmd apt-get
+
+  require_base_packages_completed
+  require_driver_install_completed
+  require_nvidia_driver_ready_for_setup
+
+  log "Installing CUDA toolkit/runtime and active profile (idempotent)"
+  apt-get update -y
+
+  install_cuda_toolkit
+  write_cuda_profile
+
+  mark_action_complete "$CUDA_RUNTIME_MARKER"
+
+  echo
+  echo "CUDA runtime installation step completed."
+  echo "Next step: optionally install container runtime with: sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime"
+}
+
+install_cuda_container_runtime_action() {
+  require_root
+  need_cmd apt-get
+
+  require_base_packages_completed
+  require_driver_install_completed
+  require_nvidia_driver_ready_for_setup
+
+  log "Installing NVIDIA container runtime integration (idempotent)"
+  apt-get update -y
+
+  install_nvidia_container_toolkit
+
+  mark_action_complete "$CUDA_CONTAINER_RUNTIME_MARKER"
+
+  echo
+  echo "CUDA container runtime installation step completed."
+  echo "Next step: verify with sudo ./gpu-node-bootstrap.sh --mode verify"
 }
 
 write_nvidia_pin_preferences() {
@@ -498,13 +740,12 @@ do_setup() {
   log "Refreshing APT cache"
   apt-get update -y
 
+  require_base_packages_completed
+  require_driver_install_completed
   require_nvidia_driver_ready_for_setup
 
-  install_base_packages
-  install_cuda_toolkit
-  write_cuda_profile
-  install_docker_stack
-  install_nvidia_container_toolkit
+  install_cuda_container_runtime_action
+  install_cuda_runtime_action
 
   log "Setup complete. Running verification checks"
   do_verify
@@ -562,6 +803,10 @@ summarize_installation() {
     echo "NVIDIA driver version target  : $NVIDIA_DRIVER_VERSION"
   fi
   echo "Active CUDA profile link      : /etc/profile.d/cuda-active-runtime.sh"
+  echo "Base packages marker          : $BASE_PACKAGES_MARKER"
+  echo "Driver install marker         : $DRIVER_INSTALL_MARKER"
+  echo "CUDA runtime marker           : $CUDA_RUNTIME_MARKER"
+  echo "CUDA container marker         : $CUDA_CONTAINER_RUNTIME_MARKER"
   echo
 
   echo "Installed package versions:"
@@ -612,11 +857,18 @@ do_runbook() {
 ## 1) Run host bootstrap (root)
 
 \`\`\`bash
+sudo ./gpu-node-bootstrap.sh --install-base-packages
 sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580
 sudo reboot
 
 # after reboot
-sudo ./gpu-node-bootstrap.sh --mode setup
+sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
+
+# optional host CUDA toolkit/runtime
+sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
+
+# convenience wrapper for both runtime steps
+sudo ./gpu-node-bootstrap.sh --mode setup-cuda-runtimes
 \`\`\`
 
 ## 2) Verify host + runtime wiring
@@ -668,11 +920,21 @@ sudo ./gpu-node-bootstrap.sh --switch-active-cuda /usr/local/cuda-12.8
 # Show current kernel + installed driver + recommended upgrade candidate
 sudo ./gpu-node-bootstrap.sh --help
 
+# Full golden-path automation (stops after driver install and asks you to reboot)
+sudo ./gpu-node-bootstrap.sh --setup-all
+
 # Install/pin a branch and hold NVIDIA packages
+sudo ./gpu-node-bootstrap.sh --install-base-packages
 sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580
 
 # Install/pin an exact version
 sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580 --nvidia-driver-version 580.173.02-1ubuntu1
+
+# Install NVIDIA container runtime after drivers
+sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
+
+# Optional host CUDA runtime/toolkit
+sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
 \`\`\`
 EOF
 
@@ -686,8 +948,28 @@ while [[ $# -gt 0 ]]; do
       ACTION_SELECTED=1
       shift 2
       ;;
+    --setup-all)
+      SETUP_ALL_ONLY=1
+      ACTION_SELECTED=1
+      shift
+      ;;
+    --install-base-packages)
+      INSTALL_BASE_PACKAGES_ONLY=1
+      ACTION_SELECTED=1
+      shift
+      ;;
     --install-nvidia-driver)
       INSTALL_NVIDIA_DRIVER_ONLY=1
+      ACTION_SELECTED=1
+      shift
+      ;;
+    --install-cuda-runtime)
+      INSTALL_CUDA_RUNTIME_ONLY=1
+      ACTION_SELECTED=1
+      shift
+      ;;
+    --install-cuda-container-runtime)
+      INSTALL_CUDA_CONTAINER_RUNTIME_ONLY=1
       ACTION_SELECTED=1
       shift
       ;;
@@ -751,13 +1033,33 @@ if [[ "$ARG_COUNT" -eq 0 && "$ACTION_SELECTED" -eq 0 ]]; then
 fi
 
 if [[ "$ACTION_SELECTED" -eq 0 ]]; then
-  echo "ERROR: No action selected. Choose one of: --mode, --install-nvidia-driver, --switch-active-cuda, --summarize-installation" >&2
+  echo "ERROR: No action selected. Choose one of: --mode, --setup-all, --install-base-packages, --install-nvidia-driver, --install-cuda-runtime, --install-cuda-container-runtime, --switch-active-cuda, --summarize-installation" >&2
   usage
   exit 1
 fi
 
+if [[ "$SETUP_ALL_ONLY" -eq 1 ]]; then
+  setup_all_action
+  exit 0
+fi
+
+if [[ "$INSTALL_BASE_PACKAGES_ONLY" -eq 1 ]]; then
+  install_base_packages_action
+  exit 0
+fi
+
 if [[ "$INSTALL_NVIDIA_DRIVER_ONLY" -eq 1 ]]; then
   install_nvidia_driver
+  exit 0
+fi
+
+if [[ "$INSTALL_CUDA_RUNTIME_ONLY" -eq 1 ]]; then
+  install_cuda_runtime_action
+  exit 0
+fi
+
+if [[ "$INSTALL_CUDA_CONTAINER_RUNTIME_ONLY" -eq 1 ]]; then
+  install_cuda_container_runtime_action
   exit 0
 fi
 
@@ -773,7 +1075,7 @@ if [[ "$SUMMARIZE_ONLY" -eq 1 ]]; then
 fi
 
 case "$MODE" in
-  setup)
+  setup-cuda-runtimes)
     do_setup
     ;;
   verify)
