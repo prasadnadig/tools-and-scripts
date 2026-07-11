@@ -26,8 +26,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MODE="setup"
 RUNBOOK_OUT="$SCRIPT_DIR/conda-node-bootstrap-runbook.md"
-MINIFORGE_DIR="$HOME/miniforge3"
-PYTHON_VERSION="3.13.13"
+MINIFORGE_DIR="$HOME/local/miniforge3"
+PYTHON_VERSION="3.12"
 MINIFORGE_INSTALLER_URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
 CUDA_HOME="/usr/local/cuda-12.8"
 SUMMARIZE_ONLY=0
@@ -40,8 +40,8 @@ Usage:
 
 Options:
   --mode <mode>                 setup (default), verify, runbook
-  --miniforge-dir <path>        Miniforge install path (default: ~/miniforge3)
-  --python-version <version>    Python version for base env (default: 3.13.13)
+  --miniforge-dir <path>        Miniforge install path (default: ~/local/miniforge3)
+  --python-version <version>    Python version for base env (default: 3.12)
   --installer-url <url>         Miniforge installer URL
   --cuda-home <path>            CUDA_HOME used in shell exports (default: /usr/local/cuda-12.8)
   --runbook-out <path>          Output path for runbook mode
@@ -51,7 +51,7 @@ Options:
 Examples:
   ./conda-node-bootstrap.sh
   ./conda-node-bootstrap.sh --mode verify
-  ./conda-node-bootstrap.sh --python-version 3.13.13
+  ./conda-node-bootstrap.sh --python-version 3.12
   ./conda-node-bootstrap.sh --summarize-installation
 EOF
 }
@@ -213,7 +213,7 @@ summarize_installation() {
 
 do_runbook() {
   cat > "$RUNBOOK_OUT" <<EOF
-# Conda Node Bootstrap Runbook (Miniforge + Python 3.13.13)
+# Conda Node Bootstrap Runbook (Miniforge + Python 3.12)
 
 ## 1) Run user bootstrap (NOT root)
 
@@ -247,7 +247,7 @@ conda config --show create_default_packages
 This script appends to ~/.bashrc:
 
 \`\`\`bash
-export PATH="$HOME/miniforge3/bin:$PATH"
+export PATH="$HOME/local/miniforge3/bin:$PATH"
 export CUDA_HOME=/usr/local/cuda-12.8
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/targets/x86_64-linux/lib:$LD_LIBRARY_PATH"

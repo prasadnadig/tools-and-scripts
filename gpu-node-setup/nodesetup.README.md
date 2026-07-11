@@ -46,8 +46,8 @@ Purpose:
 - Install and configure Conda for a regular unix user with a notebook-ready base environment.
 
 Installs/configures:
-- Miniforge under `~/miniforge3` (default, configurable)
-- Base environment Python version target: `3.13.13` (default, configurable)
+- Miniforge under `~/local/miniforge3` (default, configurable)
+- Base environment Python version target: `3.12` (default, configurable)
 - Base env packages: `jupyterlab`, `nb_conda_kernels`
 - Conda default package policy: auto-install `ipykernel` in all newly created envs
 - User shell exports for Conda and CUDA runtime paths in `~/.bashrc`
@@ -64,7 +64,7 @@ CLI modes/options:
 - `--mode setup|verify|runbook` (default: `setup`)
 - `--summarize-installation`
 - `--miniforge-dir <path>`
-- `--python-version <version>` (default: `3.13.13`)
+- `--python-version <version>` (default: `3.12`)
 - `--installer-url <url>`
 - `--cuda-home <path>`
 
@@ -73,7 +73,7 @@ Examples:
 ./conda-node-bootstrap.sh --mode setup
 ./conda-node-bootstrap.sh --mode verify
 ./conda-node-bootstrap.sh --summarize-installation
-./conda-node-bootstrap.sh --python-version 3.13.13
+./conda-node-bootstrap.sh --python-version 3.12
 ```
 
 ## Suggested execution order
@@ -119,7 +119,7 @@ Host-level script writes:
 - `/etc/profile.d/cuda-12-8-runtime.sh`
 
 User-level script appends to `~/.bashrc`:
-- `export PATH="$HOME/miniforge3/bin:$PATH"`
+- `export PATH="$HOME/local/miniforge3/bin:$PATH"`
 - `export CUDA_HOME=/usr/local/cuda-12.8`
 - `export PATH="$CUDA_HOME/bin:$PATH"`
 - `export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/targets/x86_64-linux/lib:$LD_LIBRARY_PATH"`
