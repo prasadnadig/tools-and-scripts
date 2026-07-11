@@ -83,7 +83,7 @@ Options:
   --install-cuda-runtime                       Install CUDA toolkit/runtime and active CUDA shell profile
   --install-cuda-container-runtime             Install NVIDIA container runtime integration for Docker
   --switch-active-cuda <path>                  Switch active CUDA runtime profile (idempotent)
-  --nvidia-driver-branch <branch>              Driver branch to install/pin (default: 580)
+  --nvidia-driver-branch <branch>              Driver branch to install/pin (default: 580). Accepts 580 or nvidia-driver-580-open
   --nvidia-driver-version <ver>                Exact driver version to pin (example: 580.173.02-1ubuntu1)
   --disable-nvidia-hold                        Do not apt-mark hold NVIDIA packages after install
   --cuda-toolkit-apt-package <name>            APT CUDA toolkit package (default: cuda-toolkit-12-8)
@@ -259,6 +259,24 @@ driver_branch_from_package() {
   echo "$pkg" | sed -E 's/^nvidia-driver-([0-9]+).*$/\1/'
 }
 
+normalize_driver_branch_input() {
+  local input="$1"
+
+  if [[ "$input" =~ ^[0-9]+$ ]]; then
+    echo "$input"
+    return 0
+  fi
+
+  if [[ "$input" =~ ^nvidia-driver-([0-9]+).*$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  echo "ERROR: Invalid --nvidia-driver-branch value: $input" >&2
+  echo "Use a numeric branch like 595, or a package name like nvidia-driver-595-open." >&2
+  return 1
+}
+
 print_driver_upgrade_advice() {
   local kernel current recommended_pkg recommended_branch recommended_candidate module_open_pkg module_pkg module_open_candidate module_candidate
 
@@ -280,7 +298,7 @@ print_driver_upgrade_advice() {
     module_open_candidate="$(apt_candidate_version "$module_open_pkg" || true)"
     module_candidate="$(apt_candidate_version "$module_pkg" || true)"
 
-    echo "Recommended driver package (maps to --nvidia-driver-branch) : $recommended_pkg"
+    echo "Recommended driver branch   : ${recommended_branch} (from package: ${recommended_pkg})"
     echo "Best upgrade candidate now  : ${recommended_candidate:-not available}"
     echo "Kernel module candidate     : $module_open_pkg => ${module_open_candidate:-none}"
     echo "Kernel module fallback      : $module_pkg => ${module_candidate:-none}"
@@ -288,7 +306,7 @@ print_driver_upgrade_advice() {
     echo "Tip                         : choose a branch where both driver and kernel module candidates are available"
   else
     echo "Recommended driver version (maps to --nvidia-driver-version) : unavailable (run --install-base-packages first so help can inspect and suggest the next NVIDIA driver step)"
-    echo "Recommended driver package (maps to --nvidia-driver-branch) : unavailable (run --install-base-packages first so help can inspect and suggest the next NVIDIA driver step)"
+    echo "Recommended driver branch   : unavailable (run --install-base-packages first so help can inspect and suggest the next NVIDIA driver step)"
   fi
 }
 
@@ -1050,6 +1068,8 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+NVIDIA_DRIVER_BRANCH="$(normalize_driver_branch_input "$NVIDIA_DRIVER_BRANCH")"
 
 if [[ "$ARG_COUNT" -eq 0 && "$ACTION_SELECTED" -eq 0 ]]; then
   usage
