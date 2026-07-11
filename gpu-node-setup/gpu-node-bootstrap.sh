@@ -29,6 +29,9 @@ RUNBOOK_OUT="$SCRIPT_DIR/gpu-node-bootstrap-runbook.md"
 CUDA_TOOLKIT_APT_PACKAGE="cuda-toolkit-12-8"
 CUDA_HOME="/usr/local/cuda-12.8"
 NVIDIA_CONTAINER_TOOLKIT_VERSION="latest"
+NVIDIA_DRIVER_BRANCH="580"
+NVIDIA_DRIVER_VERSION=""
+DISABLE_NVIDIA_HOLD=0
 SKIP_DOCKER_INSTALL=0
 SUMMARIZE_ONLY=0
 INSTALL_NVIDIA_DRIVER_ONLY=0
@@ -54,6 +57,9 @@ Options:
   --mode <mode>                                setup, verify, runbook
   --install-nvidia-driver                      Install/update host NVIDIA drivers (idempotent)
   --switch-active-cuda <path>                  Switch active CUDA runtime profile (idempotent)
+  --nvidia-driver-branch <branch>              Driver branch to install/pin (default: 580)
+  --nvidia-driver-version <ver>                Exact driver version to pin (example: 580.173.02-1ubuntu1)
+  --disable-nvidia-hold                        Do not apt-mark hold NVIDIA packages after install
   --cuda-toolkit-apt-package <name>            APT CUDA toolkit package (default: cuda-toolkit-12-8)
   --cuda-home <path>                           CUDA_HOME path (default: /usr/local/cuda-12.8)
   --nvidia-container-toolkit-version <version> Toolkit version to install (default: latest)
@@ -64,12 +70,16 @@ Options:
 
 Examples:
   sudo ./gpu-node-bootstrap.sh --install-nvidia-driver
+  sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580
+  sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-version 580.173.02-1ubuntu1
   sudo ./gpu-node-bootstrap.sh --mode setup
   sudo ./gpu-node-bootstrap.sh --switch-active-cuda /usr/local/cuda-12.8
   sudo ./gpu-node-bootstrap.sh --mode verify
   sudo ./gpu-node-bootstrap.sh --nvidia-container-toolkit-version 1.17.8-1
   sudo ./gpu-node-bootstrap.sh --summarize-installation
 EOF
+
+  print_driver_upgrade_advice
 }
 
 log() {
@@ -118,6 +128,62 @@ ensure_apt_candidate() {
   return 0
 }
 
+apt_candidate_version() {
+  local pkg="$1"
+  apt-cache policy "$pkg" 2>/dev/null | awk '/Candidate:/ {print $2; exit}'
+}
+
+recommended_driver_package() {
+  if ! command -v ubuntu-drivers >/dev/null 2>&1; then
+    return
+  fi
+
+  ubuntu-drivers devices 2>/dev/null \
+    | awk '/recommended/ {for (i = 1; i <= NF; i++) if ($i ~ /^nvidia-driver-[0-9]+(-open)?$/) {print $i; exit}}'
+}
+
+installed_driver_version() {
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -n 1
+  fi
+}
+
+driver_branch_from_package() {
+  local pkg="$1"
+  echo "$pkg" | sed -E 's/^nvidia-driver-([0-9]+)(-open)?$/\1/'
+}
+
+print_driver_upgrade_advice() {
+  local kernel current recommended_pkg recommended_branch recommended_candidate module_open_pkg module_pkg module_open_candidate module_candidate
+
+  kernel="$(uname -r 2>/dev/null || echo unknown)"
+  current="$(installed_driver_version || true)"
+  recommended_pkg="$(recommended_driver_package || true)"
+
+  echo
+  echo "Driver Upgrade Guidance"
+  echo "-----------------------"
+  echo "Current kernel              : $kernel"
+  echo "Installed driver version    : ${current:-not detected}"
+
+  if [[ -n "$recommended_pkg" ]]; then
+    recommended_branch="$(driver_branch_from_package "$recommended_pkg")"
+    recommended_candidate="$(apt_candidate_version "$recommended_pkg")"
+    module_open_pkg="linux-modules-nvidia-${recommended_branch}-open-${kernel}"
+    module_pkg="linux-modules-nvidia-${recommended_branch}-${kernel}"
+    module_open_candidate="$(apt_candidate_version "$module_open_pkg")"
+    module_candidate="$(apt_candidate_version "$module_pkg")"
+
+    echo "Recommended driver package  : $recommended_pkg"
+    echo "Best upgrade candidate now  : ${recommended_candidate:-not available}"
+    echo "Kernel module candidate     : $module_open_pkg => ${module_open_candidate:-none}"
+    echo "Kernel module fallback      : $module_pkg => ${module_candidate:-none}"
+    echo "Tip                         : choose a branch where both driver and kernel module candidates are available"
+  else
+    echo "Recommended driver package  : unavailable (install ubuntu-drivers-common for detection)"
+  fi
+}
+
 has_nvidia_smi() {
   command -v nvidia-smi >/dev/null 2>&1
 }
@@ -143,20 +209,84 @@ EOF
 }
 
 install_nvidia_driver() {
+  local target_driver_pkg
+
   require_root
   need_cmd apt-get
 
-  log "Installing/updating host NVIDIA driver stack (idempotent)"
+  target_driver_pkg="nvidia-driver-${NVIDIA_DRIVER_BRANCH}"
+
+  log "Installing/updating host NVIDIA driver stack (idempotent, branch=${NVIDIA_DRIVER_BRANCH})"
   apt-get update -y
+  apt-get -y --fix-broken install || true
   apt_install_if_missing ubuntu-drivers-common
 
+  write_nvidia_pin_preferences
+  apt-get update -y
+
   ubuntu-drivers devices || true
-  ubuntu-drivers autoinstall
+
+  if ! ensure_apt_candidate "$target_driver_pkg"; then
+    echo "ERROR: Driver package candidate not available: $target_driver_pkg" >&2
+    print_driver_upgrade_advice >&2
+    exit 1
+  fi
+
+  apt-get install -y "$target_driver_pkg"
+
+  if [[ "$DISABLE_NVIDIA_HOLD" -eq 0 ]]; then
+    hold_nvidia_branch_packages
+  else
+    log "Skipping apt-mark hold for NVIDIA packages by request"
+  fi
 
   echo
   echo "NVIDIA driver installation step completed."
+  echo "Pinned branch               : ${NVIDIA_DRIVER_BRANCH}"
+  if [[ -n "$NVIDIA_DRIVER_VERSION" ]]; then
+    echo "Pinned exact version        : ${NVIDIA_DRIVER_VERSION}"
+  fi
   echo "A reboot is required before GPU runtime checks will pass."
   echo "Run: sudo reboot"
+}
+
+write_nvidia_pin_preferences() {
+  local pin_file pin_version
+
+  pin_file="/etc/apt/preferences.d/nvidia-driver-pin"
+  pin_version="${NVIDIA_DRIVER_VERSION:-${NVIDIA_DRIVER_BRANCH}.*}"
+
+  cat > "$pin_file" <<EOF
+Package: nvidia-driver-${NVIDIA_DRIVER_BRANCH} nvidia-kernel-common-${NVIDIA_DRIVER_BRANCH} nvidia-utils-${NVIDIA_DRIVER_BRANCH} libnvidia-compute-${NVIDIA_DRIVER_BRANCH} linux-modules-nvidia-${NVIDIA_DRIVER_BRANCH}-* linux-objects-nvidia-${NVIDIA_DRIVER_BRANCH}-* nvidia-dkms-${NVIDIA_DRIVER_BRANCH}
+Pin: version ${pin_version}
+Pin-Priority: 1001
+EOF
+
+  chmod 0644 "$pin_file"
+  log "Wrote NVIDIA apt pin preferences: $pin_file (version=${pin_version})"
+}
+
+hold_nvidia_branch_packages() {
+  local pkgs=()
+  local pkg
+
+  for pkg in \
+    "nvidia-driver-${NVIDIA_DRIVER_BRANCH}" \
+    "nvidia-kernel-common-${NVIDIA_DRIVER_BRANCH}" \
+    "nvidia-utils-${NVIDIA_DRIVER_BRANCH}" \
+    "libnvidia-compute-${NVIDIA_DRIVER_BRANCH}" \
+    "nvidia-dkms-${NVIDIA_DRIVER_BRANCH}"; do
+    if dpkg -s "$pkg" >/dev/null 2>&1; then
+      pkgs+=("$pkg")
+    fi
+  done
+
+  if [[ "${#pkgs[@]}" -gt 0 ]]; then
+    apt-mark hold "${pkgs[@]}" >/dev/null
+    log "Held NVIDIA packages: ${pkgs[*]}"
+  else
+    log "No installed NVIDIA packages found to hold for branch ${NVIDIA_DRIVER_BRANCH}"
+  fi
 }
 
 cuda_slug_from_home() {
@@ -427,11 +557,15 @@ summarize_installation() {
   echo "CUDA apt package target       : $CUDA_TOOLKIT_APT_PACKAGE"
   echo "CUDA_HOME target              : $CUDA_HOME"
   echo "NVIDIA toolkit version target : $NVIDIA_CONTAINER_TOOLKIT_VERSION"
+  echo "NVIDIA driver branch target   : $NVIDIA_DRIVER_BRANCH"
+  if [[ -n "$NVIDIA_DRIVER_VERSION" ]]; then
+    echo "NVIDIA driver version target  : $NVIDIA_DRIVER_VERSION"
+  fi
   echo "Active CUDA profile link      : /etc/profile.d/cuda-active-runtime.sh"
   echo
 
   echo "Installed package versions:"
-  dpkg -l | egrep 'cuda-toolkit-12-8|nvidia-container-toolkit|docker-ce|containerd.io' || true
+  dpkg -l | egrep 'cuda-toolkit-12-8|nvidia-container-toolkit|docker-ce|containerd.io|nvidia-driver-[0-9]+|nvidia-kernel-common-[0-9]+' || true
   echo
 
   echo "Detected runtime/tool versions:"
@@ -450,6 +584,13 @@ summarize_installation() {
   echo
   echo "NVIDIA management library visibility:"
   ldconfig -p | grep 'libnvidia-ml.so.1' || true
+  echo
+
+  echo "Held NVIDIA packages:"
+  apt-mark showhold | grep '^nvidia' || true
+  echo
+
+  print_driver_upgrade_advice
   echo
 
   echo "Profile config (active):"
@@ -471,7 +612,7 @@ do_runbook() {
 ## 1) Run host bootstrap (root)
 
 \`\`\`bash
-sudo ./gpu-node-bootstrap.sh --install-nvidia-driver
+sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580
 sudo reboot
 
 # after reboot
@@ -520,6 +661,19 @@ export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/targets/x86_64-linux/lib:$LD
 \`\`\`bash
 sudo ./gpu-node-bootstrap.sh --switch-active-cuda /usr/local/cuda-12.8
 \`\`\`
+
+## 7) Driver compatibility and upgrades
+
+\`\`\`bash
+# Show current kernel + installed driver + recommended upgrade candidate
+sudo ./gpu-node-bootstrap.sh --help
+
+# Install/pin a branch and hold NVIDIA packages
+sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580
+
+# Install/pin an exact version
+sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580 --nvidia-driver-version 580.173.02-1ubuntu1
+\`\`\`
 EOF
 
   log "Generated runbook: $RUNBOOK_OUT"
@@ -541,6 +695,18 @@ while [[ $# -gt 0 ]]; do
       SWITCH_ACTIVE_CUDA_HOME="$2"
       ACTION_SELECTED=1
       shift 2
+      ;;
+    --nvidia-driver-branch)
+      NVIDIA_DRIVER_BRANCH="$2"
+      shift 2
+      ;;
+    --nvidia-driver-version)
+      NVIDIA_DRIVER_VERSION="$2"
+      shift 2
+      ;;
+    --disable-nvidia-hold)
+      DISABLE_NVIDIA_HOLD=1
+      shift
       ;;
     --cuda-toolkit-apt-package)
       CUDA_TOOLKIT_APT_PACKAGE="$2"
