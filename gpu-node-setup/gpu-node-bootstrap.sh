@@ -284,9 +284,10 @@ print_driver_upgrade_advice() {
     echo "Best upgrade candidate now  : ${recommended_candidate:-not available}"
     echo "Kernel module candidate     : $module_open_pkg => ${module_open_candidate:-none}"
     echo "Kernel module fallback      : $module_pkg => ${module_candidate:-none}"
+    echo "Recommended driver version  : ${recommended_candidate:-not available}"
     echo "Tip                         : choose a branch where both driver and kernel module candidates are available"
   else
-    echo "Recommended driver package  : unavailable (run --install-base-packages first so help can inspect and suggest the next NVIDIA driver step)"
+    echo "Recommended driver version  : unavailable (run --install-base-packages first so help can inspect and suggest the next NVIDIA driver step)"
   fi
 }
 
