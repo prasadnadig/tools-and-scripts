@@ -20,6 +20,7 @@ set -euo pipefail
 # Extra option:
 #   --summarize-installation -> print installed versions/details (standalone or after setup)
 #   --install-nvidia-driver  -> install host NVIDIA driver stack (idempotent)
+#   --switch-active-cuda     -> switch active CUDA runtime profile (idempotent)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -31,6 +32,7 @@ NVIDIA_CONTAINER_TOOLKIT_VERSION="latest"
 SKIP_DOCKER_INSTALL=0
 SUMMARIZE_ONLY=0
 INSTALL_NVIDIA_DRIVER_ONLY=0
+SWITCH_ACTIVE_CUDA_HOME=""
 ACTION_SELECTED=0
 ARG_COUNT=$#
 
@@ -39,16 +41,19 @@ usage() {
 Usage:
   sudo ./gpu-node-bootstrap.sh --mode setup|verify|runbook [options]
   sudo ./gpu-node-bootstrap.sh --install-nvidia-driver [options]
+  sudo ./gpu-node-bootstrap.sh --switch-active-cuda <cuda-home> [options]
   sudo ./gpu-node-bootstrap.sh --summarize-installation [options]
 
 Notes:
-  - At least one action option is required: --mode, --install-nvidia-driver, or --summarize-installation
+  - At least one action option is required: --mode, --install-nvidia-driver, --switch-active-cuda, or --summarize-installation
   - Running with no arguments only prints this help
   - Re-running setup/driver install is safe (idempotent) and intended for repair workflows
+  - Re-running CUDA profile switches is safe (idempotent)
 
 Options:
   --mode <mode>                                setup, verify, runbook
   --install-nvidia-driver                      Install/update host NVIDIA drivers (idempotent)
+  --switch-active-cuda <path>                  Switch active CUDA runtime profile (idempotent)
   --cuda-toolkit-apt-package <name>            APT CUDA toolkit package (default: cuda-toolkit-12-8)
   --cuda-home <path>                           CUDA_HOME path (default: /usr/local/cuda-12.8)
   --nvidia-container-toolkit-version <version> Toolkit version to install (default: latest)
@@ -60,6 +65,7 @@ Options:
 Examples:
   sudo ./gpu-node-bootstrap.sh --install-nvidia-driver
   sudo ./gpu-node-bootstrap.sh --mode setup
+  sudo ./gpu-node-bootstrap.sh --switch-active-cuda /usr/local/cuda-12.8
   sudo ./gpu-node-bootstrap.sh --mode verify
   sudo ./gpu-node-bootstrap.sh --nvidia-container-toolkit-version 1.17.8-1
   sudo ./gpu-node-bootstrap.sh --summarize-installation
@@ -153,6 +159,71 @@ install_nvidia_driver() {
   echo "Run: sudo reboot"
 }
 
+cuda_slug_from_home() {
+  local home="$1"
+  local slug
+
+  slug="${home#/usr/local/}"
+  slug="${slug//\//-}"
+  slug="${slug//[^a-zA-Z0-9._-]/-}"
+
+  echo "$slug"
+}
+
+profile_path_for_cuda_home() {
+  local home="$1"
+  local slug
+
+  slug="$(cuda_slug_from_home "$home")"
+  echo "/etc/profile.d/cuda-${slug}-runtime.sh"
+}
+
+write_cuda_profile_for_home() {
+  local home="$1"
+  local profile_file
+
+  profile_file="$(profile_path_for_cuda_home "$home")"
+
+  cat > "$profile_file" <<EOF
+export CUDA_HOME=$home
+export PATH="\$CUDA_HOME/bin:\$PATH"
+export LD_LIBRARY_PATH="\$CUDA_HOME/lib64:\$CUDA_HOME/targets/x86_64-linux/lib:\$LD_LIBRARY_PATH"
+EOF
+
+  chmod 0644 "$profile_file"
+  ln -sfn "$profile_file" /etc/profile.d/cuda-active-runtime.sh
+
+  log "Wrote CUDA environment profile: $profile_file"
+  log "Updated active CUDA profile symlink: /etc/profile.d/cuda-active-runtime.sh -> $profile_file"
+}
+
+switch_active_cuda() {
+  local home="$1"
+
+  require_root
+
+  if [[ -z "$home" ]]; then
+    echo "ERROR: --switch-active-cuda requires a path argument." >&2
+    exit 1
+  fi
+
+  if [[ ! -d "$home" ]]; then
+    echo "ERROR: CUDA home path does not exist: $home" >&2
+    exit 1
+  fi
+
+  if [[ ! -d "$home/bin" || ! -d "$home/lib64" ]]; then
+    echo "ERROR: Invalid CUDA home (missing bin/lib64): $home" >&2
+    exit 1
+  fi
+
+  write_cuda_profile_for_home "$home"
+
+  echo
+  echo "Active CUDA runtime switched to: $home"
+  echo "Open a new shell or run: source /etc/profile"
+}
+
 require_nvidia_driver_ready_for_setup() {
   if has_nvidia_smi && has_libnvidia_ml; then
     return
@@ -214,16 +285,7 @@ setup_cuda_repo() {
 }
 
 write_cuda_profile() {
-  local profile_file="/etc/profile.d/cuda-12-8-runtime.sh"
-
-  cat > "$profile_file" <<EOF
-export CUDA_HOME=$CUDA_HOME
-export PATH="\$CUDA_HOME/bin:\$PATH"
-export LD_LIBRARY_PATH="\$CUDA_HOME/lib64:\$CUDA_HOME/targets/x86_64-linux/lib:\$LD_LIBRARY_PATH"
-EOF
-
-  chmod 0644 "$profile_file"
-  log "Wrote CUDA environment profile: $profile_file"
+  write_cuda_profile_for_home "$CUDA_HOME"
 }
 
 install_docker_stack() {
@@ -365,6 +427,7 @@ summarize_installation() {
   echo "CUDA apt package target       : $CUDA_TOOLKIT_APT_PACKAGE"
   echo "CUDA_HOME target              : $CUDA_HOME"
   echo "NVIDIA toolkit version target : $NVIDIA_CONTAINER_TOOLKIT_VERSION"
+  echo "Active CUDA profile link      : /etc/profile.d/cuda-active-runtime.sh"
   echo
 
   echo "Installed package versions:"
@@ -389,9 +452,12 @@ summarize_installation() {
   ldconfig -p | grep 'libnvidia-ml.so.1' || true
   echo
 
-  echo "Profile config (/etc/profile.d/cuda-12-8-runtime.sh):"
-  if [[ -f /etc/profile.d/cuda-12-8-runtime.sh ]]; then
-    cat /etc/profile.d/cuda-12-8-runtime.sh
+  echo "Profile config (active):"
+  if [[ -L /etc/profile.d/cuda-active-runtime.sh ]]; then
+    ls -l /etc/profile.d/cuda-active-runtime.sh
+    cat /etc/profile.d/cuda-active-runtime.sh
+  elif [[ -f /etc/profile.d/cuda-active-runtime.sh ]]; then
+    cat /etc/profile.d/cuda-active-runtime.sh
   else
     echo "(not found)"
   fi
@@ -436,9 +502,10 @@ docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu22.04 nvidia-smi
 
 ## 5) Shell runtime defaults
 
-This script writes:
+This script writes one profile per CUDA home and updates an active symlink:
 
-- /etc/profile.d/cuda-12-8-runtime.sh
+- /etc/profile.d/cuda-<slug>-runtime.sh
+- /etc/profile.d/cuda-active-runtime.sh
 
 with:
 
@@ -446,6 +513,12 @@ with:
 export CUDA_HOME=/usr/local/cuda-12.8
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/targets/x86_64-linux/lib:$LD_LIBRARY_PATH"
+\`\`\`
+
+## 6) Switch active CUDA runtime
+
+\`\`\`bash
+sudo ./gpu-node-bootstrap.sh --switch-active-cuda /usr/local/cuda-12.8
 \`\`\`
 EOF
 
@@ -463,6 +536,11 @@ while [[ $# -gt 0 ]]; do
       INSTALL_NVIDIA_DRIVER_ONLY=1
       ACTION_SELECTED=1
       shift
+      ;;
+    --switch-active-cuda)
+      SWITCH_ACTIVE_CUDA_HOME="$2"
+      ACTION_SELECTED=1
+      shift 2
       ;;
     --cuda-toolkit-apt-package)
       CUDA_TOOLKIT_APT_PACKAGE="$2"
@@ -507,13 +585,18 @@ if [[ "$ARG_COUNT" -eq 0 && "$ACTION_SELECTED" -eq 0 ]]; then
 fi
 
 if [[ "$ACTION_SELECTED" -eq 0 ]]; then
-  echo "ERROR: No action selected. Choose one of: --mode, --install-nvidia-driver, --summarize-installation" >&2
+  echo "ERROR: No action selected. Choose one of: --mode, --install-nvidia-driver, --switch-active-cuda, --summarize-installation" >&2
   usage
   exit 1
 fi
 
 if [[ "$INSTALL_NVIDIA_DRIVER_ONLY" -eq 1 ]]; then
   install_nvidia_driver
+  exit 0
+fi
+
+if [[ -n "$SWITCH_ACTIVE_CUDA_HOME" ]]; then
+  switch_active_cuda "$SWITCH_ACTIVE_CUDA_HOME"
   exit 0
 fi
 

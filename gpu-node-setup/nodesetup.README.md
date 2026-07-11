@@ -26,12 +26,13 @@ Design notes:
 - Supports diagnostic/check modes and runbook generation
 
 Action requirement:
-- You must pass an explicit action option: `--mode`, `--install-nvidia-driver`, or `--summarize-installation`
+- You must pass an explicit action option: `--mode`, `--install-nvidia-driver`, `--switch-active-cuda`, or `--summarize-installation`
 - Running with no options prints help only
 
 CLI modes/options:
 - `--mode setup|verify|runbook`
 - `--install-nvidia-driver` (idempotent; safe to rerun)
+- `--switch-active-cuda <path>` (idempotent; safe to rerun)
 - `--summarize-installation`
 - `--nvidia-container-toolkit-version <version>` (default: `latest`)
 - `--cuda-toolkit-apt-package <name>`
@@ -49,10 +50,17 @@ sudo reboot
 
 # after reboot
 sudo ./gpu-node-bootstrap.sh --mode setup
+sudo ./gpu-node-bootstrap.sh --switch-active-cuda /usr/local/cuda-12.8
 sudo ./gpu-node-bootstrap.sh --mode verify
 sudo ./gpu-node-bootstrap.sh --summarize-installation
 sudo ./gpu-node-bootstrap.sh --nvidia-container-toolkit-version 1.17.8-1
 ```
+
+Multi-version CUDA switching:
+- You can keep multiple CUDA toolkit installs side-by-side.
+- Use `--switch-active-cuda /usr/local/cuda-<version>` to change the active shell/runtime profile.
+- The script writes per-version profiles and updates `/etc/profile.d/cuda-active-runtime.sh` symlink.
+- Switching is idempotent and safe to rerun.
 
 ### conda-node-bootstrap.sh (non-root user only)
 
@@ -134,7 +142,8 @@ conda config --show create_default_packages
 ## PATH and LD_LIBRARY_PATH defaults
 
 Host-level script writes:
-- `/etc/profile.d/cuda-12-8-runtime.sh`
+- Per-version profiles: `/etc/profile.d/cuda-<slug>-runtime.sh`
+- Active profile symlink: `/etc/profile.d/cuda-active-runtime.sh`
 
 User-level script appends to `~/.bashrc`:
 - `export PATH="$HOME/local/miniforge3/bin:$PATH"`
