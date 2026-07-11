@@ -36,8 +36,8 @@ sudo ./gpu-node-bootstrap.sh --help
 
 Check the output for:
 - current kernel
-- recommended NVIDIA driver package
-- candidate driver version
+- recommended NVIDIA driver package (maps to `--nvidia-driver-branch`)
+- candidate driver version (maps to `--nvidia-driver-version`)
 - matching kernel-module candidate availability
 
 What you want:

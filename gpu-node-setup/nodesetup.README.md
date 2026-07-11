@@ -94,8 +94,8 @@ Kernel + NVIDIA compatibility and upgrade guidance:
 - Run `--install-base-packages` first, then run `--help` to print dynamic host diagnostics:
 	- current kernel
 	- currently installed NVIDIA driver version (if available)
-	- recommended NVIDIA driver package from `ubuntu-drivers`
-	- current best candidate version to upgrade
+	- recommended NVIDIA driver package from `ubuntu-drivers` (maps to `--nvidia-driver-branch`)
+	- current best candidate version to upgrade (maps to `--nvidia-driver-version`)
 	- matching kernel module package candidate availability
 - Use this output to choose a branch/version that has both driver and kernel module candidates available.
 - The script writes pin preferences at `/etc/apt/preferences.d/nvidia-driver-pin` and holds installed branch packages unless `--disable-nvidia-hold` is set.
