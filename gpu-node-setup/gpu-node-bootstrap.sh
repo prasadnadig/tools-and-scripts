@@ -234,7 +234,18 @@ recommended_driver_package() {
   fi
 
   ubuntu-drivers devices 2>/dev/null \
-    | awk '/recommended/ {for (i = 1; i <= NF; i++) if ($i ~ /^nvidia-driver-[0-9]+(-open)?$/) {print $i; exit}}'
+    | awk '
+      /recommended/ {
+        for (i = 1; i <= NF; i++) {
+          token = $i
+          gsub(/[^a-zA-Z0-9._+-]/, "", token)
+          if (token ~ /^nvidia-driver-[0-9]+([a-zA-Z0-9._+-]*)?$/) {
+            print token
+            exit
+          }
+        }
+      }
+    '
 }
 
 installed_driver_version() {
@@ -245,7 +256,7 @@ installed_driver_version() {
 
 driver_branch_from_package() {
   local pkg="$1"
-  echo "$pkg" | sed -E 's/^nvidia-driver-([0-9]+)(-open)?$/\1/'
+  echo "$pkg" | sed -E 's/^nvidia-driver-([0-9]+).*$/\1/'
 }
 
 print_driver_upgrade_advice() {
