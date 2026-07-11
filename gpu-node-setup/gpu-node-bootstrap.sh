@@ -273,12 +273,12 @@ print_driver_upgrade_advice() {
   echo "Installed driver version    : ${current:-not detected}"
 
   if [[ -n "$recommended_pkg" ]]; then
-    recommended_branch="$(driver_branch_from_package "$recommended_pkg")"
-    recommended_candidate="$(apt_candidate_version "$recommended_pkg")"
+    recommended_branch="$(driver_branch_from_package "$recommended_pkg" || true)"
+    recommended_candidate="$(apt_candidate_version "$recommended_pkg" || true)"
     module_open_pkg="linux-modules-nvidia-${recommended_branch}-open-${kernel}"
     module_pkg="linux-modules-nvidia-${recommended_branch}-${kernel}"
-    module_open_candidate="$(apt_candidate_version "$module_open_pkg")"
-    module_candidate="$(apt_candidate_version "$module_pkg")"
+    module_open_candidate="$(apt_candidate_version "$module_open_pkg" || true)"
+    module_candidate="$(apt_candidate_version "$module_pkg" || true)"
 
     echo "Recommended driver package  : $recommended_pkg"
     echo "Best upgrade candidate now  : ${recommended_candidate:-not available}"
@@ -288,6 +288,7 @@ print_driver_upgrade_advice() {
     echo "Tip                         : choose a branch where both driver and kernel module candidates are available"
   else
     echo "Recommended driver version  : unavailable (run --install-base-packages first so help can inspect and suggest the next NVIDIA driver step)"
+    echo "Recommended driver package  : unavailable (run --install-base-packages first so help can inspect and suggest the next NVIDIA driver step)"
   fi
 }
 
