@@ -67,6 +67,7 @@ Usage:
 Notes:
   - At least one action option is required: --mode, --setup-all, --install-base-packages, --install-nvidia-driver, --install-cuda-runtime, --install-cuda-container-runtime, --switch-active-cuda, or --summarize-installation
   - Running with no arguments only prints this help
+  - Verify summary reports NVIDIA detection as one driver version line, GPU count, and unique GPU model lines
   - Run --install-base-packages first on a fresh host so help can inspect and suggest NVIDIA driver candidates for the next step
   - Run --install-nvidia-driver second, then reboot
   - After drivers are ready, --install-cuda-container-runtime can be installed independently of host CUDA toolkit/runtime
@@ -83,7 +84,7 @@ Options:
   --install-cuda-runtime                       Install CUDA toolkit/runtime and active CUDA shell profile
   --install-cuda-container-runtime             Install NVIDIA container runtime integration for Docker
   --switch-active-cuda <path>                  Switch active CUDA runtime profile (idempotent)
-  --nvidia-driver-branch <branch>              Driver branch to install/pin (default: 580). Accepts 580 or nvidia-driver-580-open
+  --nvidia-driver-branch <branch>              Driver branch to install/pin (default: 580). Accepts 580 or nvidia-driver-clear-open
   --nvidia-driver-version <ver>                Exact driver version to pin (example: 580.173.02-1ubuntu1)
   --disable-nvidia-hold                        Do not apt-mark hold NVIDIA packages after install
   --cuda-toolkit-apt-package <name>            APT CUDA toolkit package (default: cuda-toolkit-12-8)
@@ -278,7 +279,7 @@ normalize_driver_branch_input() {
 }
 
 print_driver_upgrade_advice() {
-  local kernel current recommended_pkg recommended_branch recommended_candidate module_open_pkg module_pkg module_open_candidate module_candidate
+  local kernel current recommended_pkg recommended_branch recommended_candidate recommended_candidate_plain module_open_pkg module_pkg module_open_candidate module_candidate
 
   kernel="$(uname -r 2>/dev/null || echo unknown)"
   current="$(installed_driver_version || true)"
@@ -293,16 +294,22 @@ print_driver_upgrade_advice() {
   if [[ -n "$recommended_pkg" ]]; then
     recommended_branch="$(driver_branch_from_package "$recommended_pkg" || true)"
     recommended_candidate="$(apt_candidate_version "$recommended_pkg" || true)"
+    recommended_candidate_plain="${recommended_candidate%%-*}"
     module_open_pkg="linux-modules-nvidia-${recommended_branch}-open-${kernel}"
     module_pkg="linux-modules-nvidia-${recommended_branch}-${kernel}"
     module_open_candidate="$(apt_candidate_version "$module_open_pkg" || true)"
     module_candidate="$(apt_candidate_version "$module_pkg" || true)"
 
-    echo "Recommended driver branch   : ${recommended_branch} (from package: ${recommended_pkg})"
+    echo "Recommended driver branch  (maps to --nvidia-driver-branch) : ${recommended_branch} (from package: ${recommended_pkg})"
     echo "Best upgrade candidate now  : ${recommended_candidate:-not available}"
     echo "Kernel module candidate     : $module_open_pkg => ${module_open_candidate:-none}"
     echo "Kernel module fallback      : $module_pkg => ${module_candidate:-none}"
     echo "Recommended driver version (maps to --nvidia-driver-version) : ${recommended_candidate:-not available}"
+    if [[ -n "$current" && -n "$recommended_candidate_plain" && "$current" == "$recommended_candidate_plain" ]]; then
+      echo "Status                      : already on recommended driver version (${current})"
+    elif [[ -n "$current" && -n "$recommended_candidate_plain" ]]; then
+      echo "Status                      : installed (${current}) differs from recommended (${recommended_candidate_plain})"
+    fi
     echo "Tip                         : choose a branch where both driver and kernel module candidates are available"
   else
     echo "Recommended driver version (maps to --nvidia-driver-version) : unavailable (run --install-base-packages first so help can inspect and suggest the next NVIDIA driver step)"
@@ -833,6 +840,14 @@ do_verify() {
 }
 
 summarize_installation() {
+  local detected_driver_version="not detected"
+  local detected_gpu_count="0"
+
+  if has_nvidia_smi; then
+    detected_driver_version="$(installed_driver_version || true)"
+    detected_gpu_count="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l | awk '{print $1}')"
+  fi
+
   echo
   echo "============================================================"
   echo "GPU node installation summary"
@@ -840,9 +855,10 @@ summarize_installation() {
   echo "CUDA apt package target       : $CUDA_TOOLKIT_APT_PACKAGE"
   echo "CUDA_HOME target              : $CUDA_HOME"
   echo "NVIDIA toolkit version target : $NVIDIA_CONTAINER_TOOLKIT_VERSION"
-  echo "NVIDIA driver branch target   : $NVIDIA_DRIVER_BRANCH"
+  echo "NVIDIA driver branch target (default) : $NVIDIA_DRIVER_BRANCH"
+  echo "Installed driver version (detected)   : ${detected_driver_version:-not detected}"
   if [[ -n "$NVIDIA_DRIVER_VERSION" ]]; then
-    echo "NVIDIA driver version target  : $NVIDIA_DRIVER_VERSION"
+    echo "NVIDIA driver version target (override): $NVIDIA_DRIVER_VERSION"
   fi
   echo "Active CUDA profile link      : /etc/profile.d/cuda-active-runtime.sh"
   echo "Base packages marker          : $BASE_PACKAGES_MARKER"
@@ -857,13 +873,29 @@ summarize_installation() {
 
   echo "Detected runtime/tool versions:"
   if has_nvidia_smi; then
-    nvidia-smi --query-gpu=driver_version,name --format=csv,noheader || true
+    echo "nvidia-smi driver version     : ${detected_driver_version:-not detected}"
+    echo "nvidia-smi GPU count          : ${detected_gpu_count:-0}"
+    nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | sort -u | sed 's/^/nvidia-smi GPU model          : /' || true
   else
     echo "nvidia-smi: not found"
   fi
-  nvcc --version || true
-  docker --version || true
-  nvidia-ctk --version || true
+  if command -v nvcc >/dev/null 2>&1; then
+    nvcc --version || true
+  else
+    echo "nvcc: not found (host CUDA toolkit may be intentionally skipped)"
+  fi
+
+  if command -v docker >/dev/null 2>&1; then
+    docker --version || true
+  else
+    echo "docker: not found"
+  fi
+
+  if command -v nvidia-ctk >/dev/null 2>&1; then
+    nvidia-ctk --version || true
+  else
+    echo "nvidia-ctk: not found"
+  fi
   echo
 
   echo "CUDA linker visibility:"

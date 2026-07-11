@@ -212,7 +212,7 @@ summarize_installation() {
 }
 
 do_runbook() {
-  cat > "$RUNBOOK_OUT" <<EOF
+  cat > "$RUNBOOK_OUT" <<'EOF'
 # Conda Node Bootstrap Runbook (Miniforge + Python 3.12)
 
 ## 1) Run user bootstrap (NOT root)
