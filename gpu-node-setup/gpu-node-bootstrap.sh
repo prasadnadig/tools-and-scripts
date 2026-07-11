@@ -13,31 +13,42 @@ set -euo pipefail
 # - profile.d CUDA exports: ensures CUDA binaries/libraries are discoverable in shells by default.
 #
 # Modes:
-#   setup    -> install/configure components (default)
+#   setup    -> install/configure components
 #   verify   -> run diagnostics
 #   runbook  -> emit a concise markdown runbook
 #
 # Extra option:
 #   --summarize-installation -> print installed versions/details (standalone or after setup)
+#   --install-nvidia-driver  -> install host NVIDIA driver stack (idempotent)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-MODE="setup"
+MODE=""
 RUNBOOK_OUT="$SCRIPT_DIR/gpu-node-bootstrap-runbook.md"
 CUDA_TOOLKIT_APT_PACKAGE="cuda-toolkit-12-8"
 CUDA_HOME="/usr/local/cuda-12.8"
 NVIDIA_CONTAINER_TOOLKIT_VERSION="latest"
 SKIP_DOCKER_INSTALL=0
 SUMMARIZE_ONLY=0
+INSTALL_NVIDIA_DRIVER_ONLY=0
+ACTION_SELECTED=0
+ARG_COUNT=$#
 
 usage() {
   cat <<'EOF'
 Usage:
-  sudo ./gpu-node-bootstrap.sh [--mode setup|verify|runbook] [options]
-  sudo ./gpu-node-bootstrap.sh --summarize-installation
+  sudo ./gpu-node-bootstrap.sh --mode setup|verify|runbook [options]
+  sudo ./gpu-node-bootstrap.sh --install-nvidia-driver [options]
+  sudo ./gpu-node-bootstrap.sh --summarize-installation [options]
+
+Notes:
+  - At least one action option is required: --mode, --install-nvidia-driver, or --summarize-installation
+  - Running with no arguments only prints this help
+  - Re-running setup/driver install is safe (idempotent) and intended for repair workflows
 
 Options:
-  --mode <mode>                                setup (default), verify, runbook
+  --mode <mode>                                setup, verify, runbook
+  --install-nvidia-driver                      Install/update host NVIDIA drivers (idempotent)
   --cuda-toolkit-apt-package <name>            APT CUDA toolkit package (default: cuda-toolkit-12-8)
   --cuda-home <path>                           CUDA_HOME path (default: /usr/local/cuda-12.8)
   --nvidia-container-toolkit-version <version> Toolkit version to install (default: latest)
@@ -47,7 +58,8 @@ Options:
   -h, --help                                   Show this help
 
 Examples:
-  sudo ./gpu-node-bootstrap.sh
+  sudo ./gpu-node-bootstrap.sh --install-nvidia-driver
+  sudo ./gpu-node-bootstrap.sh --mode setup
   sudo ./gpu-node-bootstrap.sh --mode verify
   sudo ./gpu-node-bootstrap.sh --nvidia-container-toolkit-version 1.17.8-1
   sudo ./gpu-node-bootstrap.sh --summarize-installation
@@ -98,6 +110,58 @@ ensure_apt_candidate() {
   fi
 
   return 0
+}
+
+has_nvidia_smi() {
+  command -v nvidia-smi >/dev/null 2>&1
+}
+
+has_libnvidia_ml() {
+  ldconfig -p 2>/dev/null | grep -q 'libnvidia-ml.so.1'
+}
+
+print_nvidia_driver_remediation() {
+  cat <<'EOF'
+NVIDIA driver userspace is missing (nvidia-smi/libnvidia-ml.so.1 not found).
+Install host NVIDIA drivers first, then reboot.
+
+Suggested commands (Ubuntu):
+  sudo apt-get update
+  sudo apt-get install -y ubuntu-drivers-common
+  sudo ubuntu-drivers autoinstall
+  sudo reboot
+
+After reboot, rerun:
+  sudo ./gpu-node-bootstrap.sh --mode setup
+EOF
+}
+
+install_nvidia_driver() {
+  require_root
+  need_cmd apt-get
+
+  log "Installing/updating host NVIDIA driver stack (idempotent)"
+  apt-get update -y
+  apt_install_if_missing ubuntu-drivers-common
+
+  ubuntu-drivers devices || true
+  ubuntu-drivers autoinstall
+
+  echo
+  echo "NVIDIA driver installation step completed."
+  echo "A reboot is required before GPU runtime checks will pass."
+  echo "Run: sudo reboot"
+}
+
+require_nvidia_driver_ready_for_setup() {
+  if has_nvidia_smi && has_libnvidia_ml; then
+    return
+  fi
+
+  echo "ERROR: NVIDIA drivers are not ready on this host." >&2
+  print_nvidia_driver_remediation >&2
+  echo "Or run the script action: sudo ./gpu-node-bootstrap.sh --install-nvidia-driver" >&2
+  exit 1
 }
 
 install_base_packages() {
@@ -242,6 +306,8 @@ do_setup() {
   log "Refreshing APT cache"
   apt-get update -y
 
+  require_nvidia_driver_ready_for_setup
+
   install_base_packages
   install_cuda_toolkit
   write_cuda_profile
@@ -256,12 +322,22 @@ do_verify() {
   require_root
 
   log "Core checks"
-  nvidia-smi || true
+  if has_nvidia_smi; then
+    nvidia-smi || true
+  else
+    log "nvidia-smi not found in PATH"
+  fi
   nvcc --version || true
 
   if command -v ldconfig >/dev/null 2>&1; then
     log "CUDA runtime library visibility checks"
     ldconfig -p | egrep 'libcudart.so|libnvrtc.so|libnppicc.so' || true
+    log "NVIDIA management library visibility check"
+    ldconfig -p | grep 'libnvidia-ml.so.1' || true
+  fi
+
+  if ! has_nvidia_smi || ! has_libnvidia_ml; then
+    print_nvidia_driver_remediation
   fi
 
   log "Command path checks"
@@ -270,7 +346,12 @@ do_verify() {
   if command -v docker >/dev/null 2>&1; then
     docker --version || true
     docker info --format '{{json .Runtimes}}' || true
-    docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu22.04 nvidia-smi || true
+
+    if has_nvidia_smi && has_libnvidia_ml; then
+      docker run --rm --gpus all nvidia/cuda:12.8.1-runtime-ubuntu22.04 nvidia-smi || true
+    else
+      log "Skipping Docker GPU smoke test because host NVIDIA driver userspace is not ready"
+    fi
   fi
 
   summarize_installation
@@ -291,7 +372,11 @@ summarize_installation() {
   echo
 
   echo "Detected runtime/tool versions:"
-  nvidia-smi --query-gpu=driver_version,name --format=csv,noheader || true
+  if has_nvidia_smi; then
+    nvidia-smi --query-gpu=driver_version,name --format=csv,noheader || true
+  else
+    echo "nvidia-smi: not found"
+  fi
   nvcc --version || true
   docker --version || true
   nvidia-ctk --version || true
@@ -299,6 +384,9 @@ summarize_installation() {
 
   echo "CUDA linker visibility:"
   ldconfig -p | egrep 'libcudart.so|libnvrtc.so|libnppicc.so' || true
+  echo
+  echo "NVIDIA management library visibility:"
+  ldconfig -p | grep 'libnvidia-ml.so.1' || true
   echo
 
   echo "Profile config (/etc/profile.d/cuda-12-8-runtime.sh):"
@@ -317,6 +405,10 @@ do_runbook() {
 ## 1) Run host bootstrap (root)
 
 \`\`\`bash
+sudo ./gpu-node-bootstrap.sh --install-nvidia-driver
+sudo reboot
+
+# after reboot
 sudo ./gpu-node-bootstrap.sh --mode setup
 \`\`\`
 
@@ -364,7 +456,13 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --mode)
       MODE="$2"
+      ACTION_SELECTED=1
       shift 2
+      ;;
+    --install-nvidia-driver)
+      INSTALL_NVIDIA_DRIVER_ONLY=1
+      ACTION_SELECTED=1
+      shift
       ;;
     --cuda-toolkit-apt-package)
       CUDA_TOOLKIT_APT_PACKAGE="$2"
@@ -388,6 +486,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --summarize-installation)
       SUMMARIZE_ONLY=1
+      ACTION_SELECTED=1
       shift
       ;;
     -h|--help)
@@ -401,6 +500,22 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$ARG_COUNT" -eq 0 && "$ACTION_SELECTED" -eq 0 ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "$ACTION_SELECTED" -eq 0 ]]; then
+  echo "ERROR: No action selected. Choose one of: --mode, --install-nvidia-driver, --summarize-installation" >&2
+  usage
+  exit 1
+fi
+
+if [[ "$INSTALL_NVIDIA_DRIVER_ONLY" -eq 1 ]]; then
+  install_nvidia_driver
+  exit 0
+fi
 
 if [[ "$SUMMARIZE_ONLY" -eq 1 ]]; then
   require_root

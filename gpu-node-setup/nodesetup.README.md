@@ -22,18 +22,32 @@ Not installed:
 Design notes:
 - Uses CUDA major/minor stream from the repeatable setup script (12.8 defaults)
 - Supports idempotent re-runs (checks package presence and safely rewrites config)
+- Supports idempotent NVIDIA driver re-install via explicit action for repair workflows
 - Supports diagnostic/check modes and runbook generation
 
+Action requirement:
+- You must pass an explicit action option: `--mode`, `--install-nvidia-driver`, or `--summarize-installation`
+- Running with no options prints help only
+
 CLI modes/options:
-- `--mode setup|verify|runbook` (default: `setup`)
+- `--mode setup|verify|runbook`
+- `--install-nvidia-driver` (idempotent; safe to rerun)
 - `--summarize-installation`
 - `--nvidia-container-toolkit-version <version>` (default: `latest`)
 - `--cuda-toolkit-apt-package <name>`
 - `--cuda-home <path>`
 - `--skip-docker-install`
 
+Setup precondition:
+- `--mode setup` now checks host NVIDIA driver readiness (`nvidia-smi` and `libnvidia-ml.so.1`)
+- If missing, setup exits with guidance to run `--install-nvidia-driver` first and reboot
+
 Examples:
 ```bash
+sudo ./gpu-node-bootstrap.sh --install-nvidia-driver
+sudo reboot
+
+# after reboot
 sudo ./gpu-node-bootstrap.sh --mode setup
 sudo ./gpu-node-bootstrap.sh --mode verify
 sudo ./gpu-node-bootstrap.sh --summarize-installation
@@ -80,6 +94,10 @@ Examples:
 
 1. Run host runtime setup as root:
 ```bash
+sudo ./gpu-node-bootstrap.sh --install-nvidia-driver
+sudo reboot
+
+# after reboot
 sudo ./gpu-node-bootstrap.sh --mode setup
 ```
 
