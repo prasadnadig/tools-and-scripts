@@ -88,7 +88,7 @@ Do not continue with CUDA toolkit/runtime or Docker GPU runtime setup before thi
 Run:
 
 ```bash
-sudo ./gpu-node-bootstrap.sh --mode verify
+sudo ./gpu-node-bootstrap.sh --verify
 ```
 
 What you want to see:
@@ -128,7 +128,7 @@ This step configures:
 Run:
 
 ```bash
-sudo ./gpu-node-bootstrap.sh --mode verify
+sudo ./gpu-node-bootstrap.sh --verify
 ```
 
 What you want to see:
@@ -181,10 +181,10 @@ Example:
 ```bash
 sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580 --nvidia-driver-version <exact-version-from-help>
 sudo reboot
-sudo ./gpu-node-bootstrap.sh --mode verify
+sudo ./gpu-node-bootstrap.sh --verify
 sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
 sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
-sudo ./gpu-node-bootstrap.sh --mode verify
+sudo ./gpu-node-bootstrap.sh --verify
 ```
 
 Why this is safer:
@@ -215,10 +215,10 @@ sudo ./gpu-node-bootstrap.sh --install-nvidia-driver
 sudo reboot
 
 # after reconnecting
-sudo ./gpu-node-bootstrap.sh --mode verify
+sudo ./gpu-node-bootstrap.sh --verify
 sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
 sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
-sudo ./gpu-node-bootstrap.sh --mode verify
+sudo ./gpu-node-bootstrap.sh --verify
 sudo ./gpu-node-bootstrap.sh --summarize-installation
 ./conda-node-bootstrap.sh --install-conda
 ./conda-node-bootstrap.sh --verify

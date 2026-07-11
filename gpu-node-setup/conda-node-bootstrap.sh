@@ -41,22 +41,34 @@ usage() {
   cat <<'EOF'
 Usage:
   ./conda-node-bootstrap.sh [--install-conda|--verify|--runbook] [options]
+  ./conda-node-bootstrap.sh --update-cuda-paths-in-env [path]
   ./conda-node-bootstrap.sh --summarize-installation
   ./conda-node-bootstrap.sh --help
 
 Options:
-  --install-conda               Install/configure Miniforge + base env tooling
-  --verify                      Run diagnostics for existing installation
-  --runbook                     Generate concise markdown runbook
-  --miniforge-dir <path>        Miniforge install path (default: ~/local/miniforge3)
-  --python-version <version>    Python version for base env (default: 3.12)
-  --installer-url <url>         Miniforge installer URL
-  --update-cuda-paths-in-env [path]
-                                Update CUDA-related shell exports in ~/.bashrc.
-                                Uses provided path, otherwise falls back to CUDA_HOME env.
-  --runbook-out <path>          Output path for runbook mode
-  --summarize-installation      Print key versions/details and exit
-  -h, --help                    Show this help
+  Primary actions (choose at most one):
+    --install-conda               Install/configure Miniforge + base env tooling
+    --verify                      Run diagnostics for existing installation
+    --runbook                     Generate concise markdown runbook
+    --summarize-installation      Print key versions/details and exit
+
+  Action-scoped options:
+    For --install-conda:
+      --miniforge-dir <path>      Miniforge install path (default: ~/local/miniforge3)
+      --python-version <version>  Python version for base env (default: 3.12)
+      --installer-url <url>       Miniforge installer URL
+
+    For --runbook:
+      --runbook-out <path>        Output path for runbook markdown
+
+    Standalone CUDA env update operation:
+      --update-cuda-paths-in-env [path]
+                                  Update CUDA-related shell exports in ~/.bashrc.
+                                  Uses provided path, otherwise falls back to CUDA_HOME env.
+                                  Can be run by itself (no primary action required).
+
+  Misc:
+    -h, --help                    Show this help
 
 Examples:
   ./conda-node-bootstrap.sh --install-conda

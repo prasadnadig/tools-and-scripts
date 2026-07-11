@@ -12,10 +12,10 @@ set -euo pipefail
 # - nvidia-container-toolkit: enables Docker containers to access host GPUs.
 # - profile.d CUDA exports: ensures CUDA binaries/libraries are discoverable in shells by default.
 #
-# Modes:
-#   setup-cuda-runtimes -> install/configure CUDA runtime + container runtime components
-#   verify   -> run diagnostics
-#   runbook  -> emit a concise markdown runbook
+# Actions:
+#   --setup-cuda-runtimes -> install/configure CUDA runtime + container runtime components
+#   --verify              -> run diagnostics
+#   --runbook             -> emit a concise markdown runbook
 #
 # Extra option:
 #   --summarize-installation -> print installed versions/details (standalone or after setup)
@@ -33,7 +33,6 @@ DRIVER_INSTALL_MARKER="$STATE_DIR/nvidia-driver.done"
 CUDA_RUNTIME_MARKER="$STATE_DIR/cuda-runtime.done"
 CUDA_CONTAINER_RUNTIME_MARKER="$STATE_DIR/cuda-container-runtime.done"
 
-MODE=""
 RUNBOOK_OUT="$SCRIPT_DIR/gpu-node-bootstrap-runbook.md"
 CUDA_TOOLKIT_APT_PACKAGE="cuda-toolkit-12-8"
 CUDA_HOME="/usr/local/cuda-12.8"
@@ -48,6 +47,9 @@ INSTALL_BASE_PACKAGES_ONLY=0
 INSTALL_NVIDIA_DRIVER_ONLY=0
 INSTALL_CUDA_RUNTIME_ONLY=0
 INSTALL_CUDA_CONTAINER_RUNTIME_ONLY=0
+SETUP_CUDA_RUNTIMES_ONLY=0
+VERIFY_ONLY=0
+RUNBOOK_ONLY=0
 SWITCH_ACTIVE_CUDA_HOME=""
 ACTION_SELECTED=0
 ARG_COUNT=$#
@@ -55,7 +57,9 @@ ARG_COUNT=$#
 usage() {
   cat <<'EOF'
 Usage:
-  sudo ./gpu-node-bootstrap.sh --mode setup-cuda-runtimes|verify|runbook [options]
+  sudo ./gpu-node-bootstrap.sh --setup-cuda-runtimes [options]
+  sudo ./gpu-node-bootstrap.sh --verify [options]
+  sudo ./gpu-node-bootstrap.sh --runbook [options]
   sudo ./gpu-node-bootstrap.sh --setup-all [options]
   sudo ./gpu-node-bootstrap.sh --install-base-packages [options]
   sudo ./gpu-node-bootstrap.sh --install-nvidia-driver [options]
@@ -65,7 +69,7 @@ Usage:
   sudo ./gpu-node-bootstrap.sh --summarize-installation [options]
 
 Notes:
-  - At least one action option is required: --mode, --setup-all, --install-base-packages, --install-nvidia-driver, --install-cuda-runtime, --install-cuda-container-runtime, --switch-active-cuda, or --summarize-installation
+  - At least one action option is required: --setup-cuda-runtimes, --verify, --runbook, --setup-all, --install-base-packages, --install-nvidia-driver, --install-cuda-runtime, --install-cuda-container-runtime, --switch-active-cuda, or --summarize-installation
   - Running with no arguments only prints this help
   - Verify summary reports NVIDIA detection as one driver version line, GPU count, and unique GPU model lines
   - Docker is configured with NVIDIA as the default runtime on this host
@@ -78,23 +82,39 @@ Notes:
   - Re-running CUDA profile switches is safe (idempotent)
 
 Options:
-  --mode <mode>                                setup-cuda-runtimes, verify, runbook
-  --setup-all                                  Run full golden-path install flow end-to-end
-  --install-base-packages                      Install host prerequisite packages before driver/runtime steps
-  --install-nvidia-driver                      Install/update host NVIDIA drivers (idempotent)
-  --install-cuda-runtime                       Install CUDA toolkit/runtime and active CUDA shell profile
-  --install-cuda-container-runtime             Install NVIDIA container runtime integration for Docker
-  --switch-active-cuda <path>                  Switch active CUDA runtime profile (idempotent)
-  --nvidia-driver-branch <branch>              Driver branch to install/pin (default: 580). Accepts 580 or nvidia-driver-clear-open
-  --nvidia-driver-version <ver>                Exact driver version to pin (example: 580.173.02-1ubuntu1)
-  --disable-nvidia-hold                        Do not apt-mark hold NVIDIA packages after install
-  --cuda-toolkit-apt-package <name>            APT CUDA toolkit package (default: cuda-toolkit-12-8)
-  --cuda-home <path>                           CUDA_HOME path (default: /usr/local/cuda-12.8)
-  --nvidia-container-toolkit-version <version> Toolkit version to install (default: latest)
-  --skip-docker-install                         Skip Docker install/configuration
-  --runbook-out <path>                         Output path for runbook mode
-  --summarize-installation                      Print key versions/details and exit
-  -h, --help                                   Show this help
+  Primary actions (choose exactly one):
+    --setup-cuda-runtimes                        Install/configure CUDA + container runtimes and run verification
+    --verify                                     Run diagnostics
+    --runbook                                    Generate concise markdown runbook
+    --setup-all                                  Run full golden-path install flow end-to-end
+    --install-base-packages                      Install host prerequisite packages before driver/runtime steps
+    --install-nvidia-driver                      Install/update host NVIDIA drivers (idempotent)
+    --install-cuda-runtime                       Install CUDA toolkit/runtime and active CUDA shell profile
+    --install-cuda-container-runtime             Install NVIDIA container runtime integration for Docker
+    --switch-active-cuda <path>                  Switch active CUDA runtime profile (idempotent)
+    --summarize-installation                     Print key versions/details and exit
+
+  Action-scoped options:
+    For --install-nvidia-driver (and --setup-all driver step):
+      --nvidia-driver-branch <branch>            Driver branch to install/pin (default: 580)
+      --nvidia-driver-version <ver>              Exact driver version to pin (example: 580.173.02-1ubuntu1)
+      --disable-nvidia-hold                      Do not apt-mark hold NVIDIA packages after install
+
+    For --install-cuda-runtime (and --setup-cuda-runtimes / --setup-all runtime steps):
+      --cuda-toolkit-apt-package <name>          APT CUDA toolkit package (default: cuda-toolkit-12-8)
+      --cuda-home <path>                         CUDA_HOME path/profile target (default: /usr/local/cuda-12.8)
+
+    For --install-cuda-container-runtime (and --setup-cuda-runtimes / --setup-all runtime steps):
+      --nvidia-container-toolkit-version <ver>   Toolkit version to install (default: latest)
+
+    For --runbook:
+      --runbook-out <path>                       Output path for generated runbook markdown
+
+  Cross-cutting option:
+    --skip-docker-install                        Skip Docker install/configuration during steps that manage Docker
+
+  Misc:
+    -h, --help                                   Show this help
 
 Examples (all options reference):
   sudo ./gpu-node-bootstrap.sh --setup-all
@@ -104,9 +124,9 @@ Examples (all options reference):
   sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
   sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580
   sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-version 580.173.02-1ubuntu1
-  sudo ./gpu-node-bootstrap.sh --mode setup-cuda-runtimes
+  sudo ./gpu-node-bootstrap.sh --setup-cuda-runtimes
   sudo ./gpu-node-bootstrap.sh --switch-active-cuda /usr/local/cuda-12.8
-  sudo ./gpu-node-bootstrap.sh --mode verify
+  sudo ./gpu-node-bootstrap.sh --verify
   sudo ./gpu-node-bootstrap.sh --nvidia-container-toolkit-version 1.17.8-1
   sudo ./gpu-node-bootstrap.sh --summarize-installation
 
@@ -118,7 +138,7 @@ Examples (golden path):
   sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
   # optional host CUDA toolkit/runtime
   sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
-  sudo ./gpu-node-bootstrap.sh --mode verify
+  sudo ./gpu-node-bootstrap.sh --verify
   sudo ./gpu-node-bootstrap.sh --summarize-installation
 EOF
 
@@ -341,7 +361,7 @@ After reboot, rerun:
   sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
   sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
   # or use the wrapper:
-  sudo ./gpu-node-bootstrap.sh --mode setup-cuda-runtimes
+  sudo ./gpu-node-bootstrap.sh --setup-cuda-runtimes
 EOF
 }
 
@@ -409,7 +429,7 @@ setup_all_action() {
 
   run_setup_all_step \
     "verification" \
-    "sudo ./gpu-node-bootstrap.sh --mode verify" \
+    "sudo ./gpu-node-bootstrap.sh --verify" \
     do_verify
 
   echo
@@ -539,7 +559,7 @@ install_cuda_container_runtime_action() {
 
   echo
   echo "CUDA container runtime installation step completed."
-  echo "Next step: verify with sudo ./gpu-node-bootstrap.sh --mode verify"
+  echo "Next step: verify with sudo ./gpu-node-bootstrap.sh --verify"
 }
 
 write_nvidia_pin_preferences() {
@@ -978,13 +998,13 @@ sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
 sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
 
 # convenience wrapper for both runtime steps
-sudo ./gpu-node-bootstrap.sh --mode setup-cuda-runtimes
+sudo ./gpu-node-bootstrap.sh --setup-cuda-runtimes
 \`\`\`
 
 ## 2) Verify host + runtime wiring
 
 \`\`\`bash
-sudo ./gpu-node-bootstrap.sh --mode verify
+sudo ./gpu-node-bootstrap.sh --verify
 \`\`\`
 
 ## 3) Print installed versions/details
@@ -1053,10 +1073,20 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --mode)
-      MODE="$2"
+    --setup-cuda-runtimes)
+      SETUP_CUDA_RUNTIMES_ONLY=1
       ACTION_SELECTED=1
-      shift 2
+      shift
+      ;;
+    --verify)
+      VERIFY_ONLY=1
+      ACTION_SELECTED=1
+      shift
+      ;;
+    --runbook)
+      RUNBOOK_ONLY=1
+      ACTION_SELECTED=1
+      shift
       ;;
     --setup-all)
       SETUP_ALL_ONLY=1
@@ -1145,7 +1175,29 @@ if [[ "$ARG_COUNT" -eq 0 && "$ACTION_SELECTED" -eq 0 ]]; then
 fi
 
 if [[ "$ACTION_SELECTED" -eq 0 ]]; then
-  echo "ERROR: No action selected. Choose one of: --mode, --setup-all, --install-base-packages, --install-nvidia-driver, --install-cuda-runtime, --install-cuda-container-runtime, --switch-active-cuda, --summarize-installation" >&2
+  echo "ERROR: No action selected. Choose one of: --setup-cuda-runtimes, --verify, --runbook, --setup-all, --install-base-packages, --install-nvidia-driver, --install-cuda-runtime, --install-cuda-container-runtime, --switch-active-cuda, --summarize-installation" >&2
+  usage
+  exit 1
+fi
+
+action_count=$((
+  SETUP_ALL_ONLY +
+  INSTALL_BASE_PACKAGES_ONLY +
+  INSTALL_NVIDIA_DRIVER_ONLY +
+  INSTALL_CUDA_RUNTIME_ONLY +
+  INSTALL_CUDA_CONTAINER_RUNTIME_ONLY +
+  SETUP_CUDA_RUNTIMES_ONLY +
+  VERIFY_ONLY +
+  RUNBOOK_ONLY +
+  SUMMARIZE_ONLY
+))
+
+if [[ -n "$SWITCH_ACTIVE_CUDA_HOME" ]]; then
+  action_count=$((action_count + 1))
+fi
+
+if [[ "$action_count" -gt 1 ]]; then
+  echo "ERROR: choose only one action option per invocation" >&2
   usage
   exit 1
 fi
@@ -1186,19 +1238,17 @@ if [[ "$SUMMARIZE_ONLY" -eq 1 ]]; then
   exit 0
 fi
 
-case "$MODE" in
-  setup-cuda-runtimes)
-    do_setup
-    ;;
-  verify)
-    do_verify
-    ;;
-  runbook)
-    do_runbook
-    ;;
-  *)
-    echo "Invalid mode: $MODE" >&2
-    usage
-    exit 1
-    ;;
-esac
+if [[ "$SETUP_CUDA_RUNTIMES_ONLY" -eq 1 ]]; then
+  do_setup
+  exit 0
+fi
+
+if [[ "$VERIFY_ONLY" -eq 1 ]]; then
+  do_verify
+  exit 0
+fi
+
+if [[ "$RUNBOOK_ONLY" -eq 1 ]]; then
+  do_runbook
+  exit 0
+fi

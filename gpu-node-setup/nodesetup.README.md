@@ -27,12 +27,14 @@ Design notes:
 - Supports NVIDIA driver branch/version pinning and package hold workflow for stable upgrades
 
 Action requirement:
-- You must pass an explicit action option: `--mode`, `--setup-all`, `--install-base-packages`, `--install-nvidia-driver`, `--install-cuda-runtime`, `--install-cuda-container-runtime`, `--switch-active-cuda`, or `--summarize-installation`
+- You must pass an explicit action option: `--setup-cuda-runtimes`, `--verify`, `--runbook`, `--setup-all`, `--install-base-packages`, `--install-nvidia-driver`, `--install-cuda-runtime`, `--install-cuda-container-runtime`, `--switch-active-cuda`, or `--summarize-installation`
 - Running with no options prints help only
 - Fresh hosts should start with `--install-base-packages`
 
-CLI modes/options:
-- `--mode setup-cuda-runtimes|verify|runbook` (`setup-cuda-runtimes` is a convenience wrapper that runs both runtime install steps)
+CLI actions/options:
+- `--setup-cuda-runtimes` (`setup-cuda-runtimes` is a convenience wrapper that runs both runtime install steps)
+- `--verify`
+- `--runbook`
 - `--setup-all` (runs the golden path end-to-end, stops for reboot after driver install, then resumes on rerun)
 - `--install-base-packages` (mandatory first step on fresh hosts)
 - `--install-nvidia-driver` (idempotent; safe to rerun)
@@ -53,7 +55,7 @@ Setup precondition:
 - `--install-nvidia-driver` must be run before CUDA runtime and NVIDIA container runtime setup
 - `--install-cuda-container-runtime` depends on base packages + working NVIDIA drivers
 - `--install-cuda-runtime` is independent of container runtime and is optional for container-first GPU nodes
-- `--mode setup-cuda-runtimes` now runs the container runtime step and then the host CUDA runtime step as a convenience wrapper
+- `--setup-cuda-runtimes` now runs the container runtime step and then the host CUDA runtime step as a convenience wrapper
 - If missing, setup exits with guidance to run `--install-nvidia-driver` first and reboot
 
 Examples:
@@ -68,11 +70,11 @@ sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
 
 # optional host CUDA toolkit/runtime
 sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
-sudo ./gpu-node-bootstrap.sh --mode setup-cuda-runtimes
+sudo ./gpu-node-bootstrap.sh --setup-cuda-runtimes
 sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580
 sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580 --nvidia-driver-version 580.173.02-1ubuntu1
 sudo ./gpu-node-bootstrap.sh --switch-active-cuda /usr/local/cuda-12.8
-sudo ./gpu-node-bootstrap.sh --mode verify
+sudo ./gpu-node-bootstrap.sh --verify
 sudo ./gpu-node-bootstrap.sh --summarize-installation
 sudo ./gpu-node-bootstrap.sh --nvidia-container-toolkit-version 1.17.8-1
 ```
@@ -164,7 +166,7 @@ Recommended upgrade workflow:
 	- `sudo ./gpu-node-bootstrap.sh --install-nvidia-driver --nvidia-driver-branch 580 --nvidia-driver-version 580.173.02-1ubuntu1`
 - Reboot after driver installation.
 - Verify after reboot:
-	- `sudo ./gpu-node-bootstrap.sh --mode verify`
+	- `sudo ./gpu-node-bootstrap.sh --verify`
 
 How to intentionally upgrade later:
 - Review the new candidates first with `--help`.
@@ -238,7 +240,7 @@ sudo ./gpu-node-bootstrap.sh --install-cuda-container-runtime
 sudo ./gpu-node-bootstrap.sh --install-cuda-runtime
 
 # or use the convenience wrapper for both runtime steps
-sudo ./gpu-node-bootstrap.sh --mode setup-cuda-runtimes
+sudo ./gpu-node-bootstrap.sh --setup-cuda-runtimes
 ```
 
 2. Run Conda setup as target user:
