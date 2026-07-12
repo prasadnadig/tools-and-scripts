@@ -65,6 +65,8 @@ Options:
       --update-cuda-paths-in-env [path]
                                   Update CUDA-related shell exports in ~/.bashrc.
                                   Uses provided path, otherwise falls back to CUDA_HOME env.
+                                  Also exports CONDA_OVERRIDE_CUDA based on the selected CUDA home,
+                                  so Conda solves as if that CUDA version is available.
                                   Can be run by itself (no primary action required).
 
   Misc:
@@ -219,6 +221,24 @@ build_cuda_env_values() {
   CUDA_NEXT_LD_LIBRARY_PATH="$(dedupe_colon_list "$next_ld")"
 }
 
+cuda_override_version_from_home() {
+  local cuda_home="$1"
+  local basename
+
+  basename="$(basename "$cuda_home")"
+  if [[ "$basename" =~ cuda-([0-9]+\.[0-9]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  if [[ "$cuda_home" =~ /cuda-([0-9]+\.[0-9]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  return 1
+}
+
 update_cuda_paths_in_env() {
   local requested_path="$1"
   local cuda_home_resolved="$requested_path"
@@ -226,6 +246,7 @@ update_cuda_paths_in_env() {
   local start_marker="# >>> conda-node-bootstrap cuda paths >>>"
   local end_marker="# <<< conda-node-bootstrap cuda paths <<<"
   local block
+  local conda_override_cuda=""
 
   if [[ -z "$cuda_home_resolved" ]]; then
     cuda_home_resolved="${CUDA_HOME:-}"
@@ -243,13 +264,22 @@ update_cuda_paths_in_env() {
 
   build_cuda_env_values "$cuda_home_resolved" "${PATH:-}" "${LD_LIBRARY_PATH:-}"
 
+  conda_override_cuda="$(cuda_override_version_from_home "$cuda_home_resolved" || true)"
+  if [[ -z "$conda_override_cuda" ]]; then
+    echo "ERROR: Could not infer a CUDA version for CONDA_OVERRIDE_CUDA from: $cuda_home_resolved" >&2
+    echo "Use a CUDA home named like /usr/local/cuda-12.8 so the override can be derived." >&2
+    exit 1
+  fi
+
   export CUDA_HOME="$cuda_home_resolved"
+  export CONDA_OVERRIDE_CUDA="$conda_override_cuda"
   export PATH="$CUDA_NEXT_PATH"
   export LD_LIBRARY_PATH="$CUDA_NEXT_LD_LIBRARY_PATH"
 
   block=$(cat <<EOF
 $start_marker
 export CUDA_HOME="$cuda_home_resolved"
+export CONDA_OVERRIDE_CUDA="$conda_override_cuda"
 export PATH="$CUDA_NEXT_PATH"
 export LD_LIBRARY_PATH="$CUDA_NEXT_LD_LIBRARY_PATH"
 $end_marker
@@ -257,7 +287,7 @@ EOF
 )
 
   replace_managed_block "$bashrc" "$start_marker" "$end_marker" "$block"
-  log "Updated CUDA env paths in $bashrc using CUDA_HOME=$cuda_home_resolved"
+  log "Updated CUDA env paths in $bashrc using CUDA_HOME=$cuda_home_resolved and CONDA_OVERRIDE_CUDA=$conda_override_cuda"
 }
 
 install_miniforge() {

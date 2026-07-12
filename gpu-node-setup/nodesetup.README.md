@@ -193,6 +193,7 @@ Installs/configures:
 - Conda default package policy: auto-install `ipykernel` in all newly created envs
 - User shell exports for Conda in `~/.bashrc`
 - Optional managed CUDA shell env update in `~/.bashrc` via explicit flag
+- Optional `CONDA_OVERRIDE_CUDA` override derived from the selected CUDA home
 
 Not installed:
 - No framework-specific Conda envs are created in this stage
@@ -211,7 +212,7 @@ CLI actions/options:
 - `--python-version <version>` (default: `3.12`)
 - `--installer-url <url>`
 - `--runbook-out <path>`
-- `--update-cuda-paths-in-env [path]` (uses provided path, otherwise `CUDA_HOME` env)
+- `--update-cuda-paths-in-env [path]` (uses provided path, otherwise `CUDA_HOME` env; also sets `CONDA_OVERRIDE_CUDA`)
 - no action prints help
 
 Examples:
@@ -224,6 +225,8 @@ Examples:
 ./conda-node-bootstrap.sh --update-cuda-paths-in-env /usr/local/cuda-12.8
 CUDA_HOME=/usr/local/cuda-12.8 ./conda-node-bootstrap.sh --update-cuda-paths-in-env
 ```
+
+The standalone CUDA env update also writes `CONDA_OVERRIDE_CUDA` into `~/.bashrc` so Conda package solving can target the chosen CUDA version.
 
 ## Suggested execution order
 

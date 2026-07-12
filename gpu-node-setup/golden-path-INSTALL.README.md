@@ -163,6 +163,7 @@ Run:
 ```
 
 This should be done only after host GPU runtime setup is healthy.
+If you need Conda to solve against a specific CUDA toolkit version, run `./conda-node-bootstrap.sh --update-cuda-paths-in-env /usr/local/cuda-12.8` separately; it will set `CONDA_OVERRIDE_CUDA` along with the shell exports.
 
 ### 10. Verify the user-level Conda and notebook tooling
 
