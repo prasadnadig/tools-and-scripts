@@ -238,10 +238,15 @@ Installs/configures:
 - `torchvision`
 - `torchaudio`
 - CUDA runtime path checks based on the selected `CUDA_HOME`
+- Pinned cu128 requirements file with:
+	- `torch==2.9.1+cu128`
+	- `torchvision==0.24.1+cu128`
+	- `torchaudio==2.9.1+cu128`
 
 Design notes:
 - Requires a Conda env name and CUDA_HOME
 - Uses the cu128 wheel index for installation
+- Writes a temporary requirements file at install time before invoking pip
 - Supports install, verify, runbook, and installation-summary actions
 
 ## Suggested execution order

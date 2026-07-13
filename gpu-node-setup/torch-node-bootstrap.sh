@@ -45,6 +45,25 @@ RUNBOOK_OUT="$SCRIPT_DIR/torch-node-bootstrap-runbook.md"
 SUMMARY_OUT="$SCRIPT_DIR/torch-node-bootstrap-installation-summary.md"
 TORCH_WHEEL_INDEX_URL="https://download.pytorch.org/whl/cu128"
 
+write_torch_requirements() {
+	local req_file="$1"
+	cat > "$req_file" <<'EOF'
+# torch-family dependencies are pinned as a tested group.
+# Rationale:
+# - These versions were selected together to reduce ABI/runtime mismatch risk.
+# - Using mismatched torch/torchvision/torchaudio versions is a common source
+#   of dynamic library (.so) load failures on GPU nodes.
+# - Keep these three packages aligned as a group when upgrading.
+# - Cross-check wheel availability and compatibility at:
+#   https://download.pytorch.org/whl/
+#
+# Selected group:
+torch==2.9.1+cu128
+torchvision==0.24.1+cu128
+torchaudio==2.9.1+cu128
+EOF
+}
+
 usage() {
 	cat <<'EOF'
 Usage:
@@ -221,8 +240,14 @@ install_pytorch() {
 	activate_conda_env
 	need_cmd python
 
-	log "Installing basic PyTorch from cu128 wheel index"
-	python -m pip install --index-url "$TORCH_WHEEL_INDEX_URL" torch torchvision torchaudio
+	local req_file
+	req_file="$(mktemp /tmp/torch-requirements.XXXXXX.txt)"
+	trap "rm -f '$req_file'" EXIT
+
+	write_torch_requirements "$req_file"
+
+	log "Installing basic PyTorch from cu128 wheel index using pinned requirements"
+	python -m pip install -r "$req_file" --index-url "$TORCH_WHEEL_INDEX_URL"
 }
 
 print_version_summary() {
@@ -280,7 +305,11 @@ Script:
 - Script currently assumes CUDA 12.8.
 - CUDA_HOME is mandatory for operational actions.
 - A Conda env name is mandatory for install/verify/summary.
-- PyTorch is installed from the cu128 wheel index.
+- PyTorch is installed from the cu128 wheel index using a pinned requirements file.
+- Pinned package set:
+	- torch==2.9.1+cu128
+	- torchvision==0.24.1+cu128
+	- torchaudio==2.9.1+cu128
 - PATH and LD_LIBRARY_PATH are normalized for the current shell execution.
 
 ## Typical usage
@@ -302,6 +331,7 @@ Script:
 - Verify CUDA_HOME points to your intended toolkit root.
 - Confirm cu128 wheel compatibility before changing package versions.
 - Upgrade torch-family packages together, not one-by-one.
+- Keep the pinned requirements file in sync when deliberately upgrading.
 EOF
 
 	log "Generated runbook: $RUNBOOK_OUT"
@@ -333,6 +363,10 @@ do_summarize_installation() {
 - torch from cu128 wheel index
 - torchvision from cu128 wheel index
 - torchaudio from cu128 wheel index
+- Installed via a temporary requirements file with exact pins:
+	- torch==2.9.1+cu128
+	- torchvision==0.24.1+cu128
+	- torchaudio==2.9.1+cu128
 
 ## Operational caution
 This setup assumes your selected CUDA_HOME toolkit should own runtime selection.
