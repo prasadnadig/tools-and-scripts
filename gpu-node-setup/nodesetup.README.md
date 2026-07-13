@@ -228,6 +228,22 @@ CUDA_HOME=/usr/local/cuda-12.8 ./conda-node-bootstrap.sh --update-cuda-paths-in-
 
 The standalone CUDA env update also writes `CONDA_OVERRIDE_CUDA` into `~/.bashrc` so Conda package solving can target the chosen CUDA version.
 
+### torch-node-bootstrap.sh (non-root user only)
+
+Purpose:
+- Install a basic PyTorch stack into a selected Conda environment using the cu128 wheel index.
+
+Installs/configures:
+- `torch`
+- `torchvision`
+- `torchaudio`
+- CUDA runtime path checks based on the selected `CUDA_HOME`
+
+Design notes:
+- Requires a Conda env name and CUDA_HOME
+- Uses the cu128 wheel index for installation
+- Supports install, verify, runbook, and installation-summary actions
+
 ## Suggested execution order
 
 1. Run host runtime setup as root:
@@ -251,10 +267,16 @@ sudo ./gpu-node-bootstrap.sh --setup-cuda-runtimes
 ./conda-node-bootstrap.sh --install-conda
 ```
 
-3. Run summary outputs for quick audit:
+3. Run basic PyTorch setup in the target Conda env:
+```bash
+./torch-node-bootstrap.sh --install --env-name torch --cuda-home /usr/local/cuda-12.8 --create-conda-env
+```
+
+4. Run summary outputs for quick audit:
 ```bash
 sudo ./gpu-node-bootstrap.sh --summarize-installation
 ./conda-node-bootstrap.sh --summarize-installation
+./torch-node-bootstrap.sh --summarize-installation --env-name torch --cuda-home /usr/local/cuda-12.8
 ```
 
 ## Verification suggestions
@@ -275,6 +297,11 @@ conda --version
 conda run -n base python --version
 conda run -n base python -c "import jupyterlab, nb_conda_kernels; print(jupyterlab.__version__, nb_conda_kernels.__version__)"
 conda config --show create_default_packages
+```
+
+PyTorch env:
+```bash
+./torch-node-bootstrap.sh --verify --env-name torch --cuda-home /usr/local/cuda-12.8
 ```
 
 ## PATH and LD_LIBRARY_PATH defaults
