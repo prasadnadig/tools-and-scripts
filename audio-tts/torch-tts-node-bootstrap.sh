@@ -33,6 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 DEFAULT_PYTHON_VERSION="3.12.13"
 PYTHON_VERSION="$DEFAULT_PYTHON_VERSION"
+F5_TTS_VERSION="1.1.21"
 ENV_NAME=""
 CREATE_CONDA_ENV=0
 
@@ -51,6 +52,7 @@ Usage:
 
 Assumption:
   This script currently assumes CUDA version 12.8.
+  f5-tts is pinned to version 1.1.21.
 
 Actions (pick exactly one):
   --install                     Install torch-family deps, ffmpeg, and f5-tts
@@ -65,6 +67,8 @@ Optional options:
   --create-conda-env            Create conda env if it does not already exist
   --python-version <version>    Python version when creating env
                                 Default: 3.12.13
+  --f5-tts-version <version>    f5-tts version to install
+                                Default: 1.1.21
   --runbook-out <path>          Output path for --runbook
                                 Default: ./torch-tts-node-bootstrap-runbook.md
   --summary-out <path>          Output path for --installation-summary
@@ -74,6 +78,7 @@ Optional options:
 Examples:
   torch-tts-node-bootstrap.sh --install --env-name f5-tts --create-conda-env
   torch-tts-node-bootstrap.sh --verify --env-name f5-tts
+  torch-tts-node-bootstrap.sh --install --env-name f5-tts --f5-tts-version 1.1.21
   torch-tts-node-bootstrap.sh --runbook
   torch-tts-node-bootstrap.sh --installation-summary --env-name f5-tts
 EOF
@@ -265,15 +270,15 @@ do_install() {
 
   local req_file
   req_file="$(mktemp /tmp/torch-family-requirements.XXXXXX.txt)"
-  trap 'rm -f "$req_file"' EXIT
+  trap "rm -f '$req_file'" EXIT
 
   write_torch_requirements "$req_file"
 
   log "Installing torch-family dependencies from cu128 wheel index"
   pip install -r "$req_file" --index-url https://download.pytorch.org/whl/cu128
 
-  log "Installing f5-tts"
-  pip install f5-tts
+  log "Installing f5-tts==${F5_TTS_VERSION}"
+  pip install "f5-tts==${F5_TTS_VERSION}"
 
   post_install_runtime_notice
   log "Install action completed for env: $ENV_NAME"
@@ -312,8 +317,9 @@ Script:
 - CUDA_HOME is mandatory for operational actions.
 - PATH and LD_LIBRARY_PATH are normalized for current shell execution.
 - torch / torchaudio / torchcodec are pinned and installed as a group.
+- f5-tts is pinned to a known-good version (`${F5_TTS_VERSION}`).
 - ffmpeg is installed from conda-forge.
-- f5-tts is installed via pip.
+- f5-tts is installed via pip as `f5-tts==${F5_TTS_VERSION}`.
 
 ## Typical usage
 
@@ -365,6 +371,7 @@ do_installation_summary() {
   - torchaudio==2.9.1+cu128
   - torchcodec==0.9.1+cu128
 - f5-tts via pip
+- f5-tts pinned: f5-tts==${F5_TTS_VERSION}
 
 ## Operational caution
 This setup assumes your selected CUDA_HOME toolkit should own runtime selection.
@@ -412,6 +419,11 @@ parse_args() {
       --python-version)
         [[ $# -ge 2 ]] || die "--python-version requires a value"
         PYTHON_VERSION="$2"
+        shift 2
+        ;;
+      --f5-tts-version)
+        [[ $# -ge 2 ]] || die "--f5-tts-version requires a value"
+        F5_TTS_VERSION="$2"
         shift 2
         ;;
       --runbook-out)

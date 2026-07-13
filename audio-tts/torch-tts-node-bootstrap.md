@@ -18,7 +18,7 @@ The script is intentionally explicit about CUDA runtime ownership and avoids hid
 - Installs:
   - `ffmpeg` from conda-forge
   - torch family from `cu128` index as pinned group
-  - `f5-tts` via pip
+  - `f5-tts==1.1.21` via pip (default pin)
 - Generates runbook and installation-summary docs when requested.
 
 ## Why This Design
@@ -62,6 +62,16 @@ export CUDA_HOME=/usr/local/cuda-12.8
   --install \
   --env-name f5-tts \
   --create-conda-env
+```
+
+Optional override for F5-TTS version:
+
+```bash
+./torch-tts-node-bootstrap.sh \
+  --install \
+  --env-name f5-tts \
+  --create-conda-env \
+  --f5-tts-version 1.1.21
 ```
 
 ### 2) Install into existing env
@@ -131,6 +141,14 @@ Rationale:
 - These packages are version-sensitive with each other.
 - Pinning as a group reduces runtime ABI mismatch risk.
 - Wheel index and version compatibility must be cross-checked before upgrades.
+
+F5-TTS pin:
+
+```text
+f5-tts==1.1.21
+```
+
+The script installs this pin by default and allows override with `--f5-tts-version`.
 
 Reference:
 - https://download.pytorch.org/whl/

@@ -23,6 +23,11 @@ Hint: use `torch-tts-node-bootstrap.sh` together with `torch-tts-node-bootstrap.
 - A Conda environment with F5-TTS installed (for example using `torch-tts-node-bootstrap.sh`).
 - `ffmpeg` available if you want MP3 conversion.
 
+## Version pin used by bootstrap
+
+The bootstrap script pins F5-TTS to `1.1.21` by default for reproducibility.
+If you need a different version, pass `--f5-tts-version <version>` to the bootstrap script.
+
 ## 1) Prepare reference audio and transcript
 
 F5-TTS voice cloning quality depends heavily on clean reference inputs.
@@ -125,5 +130,6 @@ done
 ## Notes and cautions
 
 - Keep torch, torchaudio, and torchcodec versions aligned as a tested set.
+- Keep f5-tts pinned unless you are intentionally testing a newer version.
 - Check wheel compatibility when changing versions: https://download.pytorch.org/whl/
 - Use only reference audio you are authorized to use.
