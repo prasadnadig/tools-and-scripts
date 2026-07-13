@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 ###############################################################################
 # torch-tts-node-bootstrap.sh
@@ -87,6 +87,30 @@ die() {
   echo "[torch-tts-bootstrap] ERROR: $*" >&2
   exit 1
 }
+
+on_error() {
+  local exit_code="$1"
+  local line_no="$2"
+  local cmd="$3"
+
+  echo "[torch-tts-bootstrap] ERROR: command failed (exit=${exit_code}) at line ${line_no}" >&2
+  echo "[torch-tts-bootstrap] ERROR: ${cmd}" >&2
+
+  if [[ "$cmd" == *"conda "* ]]; then
+    echo "[torch-tts-bootstrap] HINT: Conda command failed. Check Conda installation and whether the target env exists." >&2
+    echo "[torch-tts-bootstrap] HINT: Re-run with --create-conda-env when the env is missing, or validate with 'conda env list'." >&2
+  elif [[ "$cmd" == *"pip install"* ]]; then
+    echo "[torch-tts-bootstrap] HINT: pip install failed. Verify network access and package index availability." >&2
+    echo "[torch-tts-bootstrap] HINT: For torch-family installs, ensure cu128 wheel variants exist for the pinned versions." >&2
+  elif [[ "$cmd" == *"python -c"* ]]; then
+    echo "[torch-tts-bootstrap] HINT: Python runtime/import check failed. Confirm install completed and package versions are compatible." >&2
+  elif [[ "$cmd" == *"f5-tts_infer-gradio"* ]]; then
+    echo "[torch-tts-bootstrap] HINT: f5-tts CLI check failed. Ensure f5-tts is installed in the selected Conda environment." >&2
+  fi
+}
+
+# Prints contextual failure details whenever an unhandled command error occurs.
+trap 'on_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
